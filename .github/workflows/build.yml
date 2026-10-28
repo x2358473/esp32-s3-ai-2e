@@ -140,7 +140,10 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: firmware-${{ matrix.ci_name || matrix.full_name }}
-          path: xiaozhi_*.bin
+          path: |
+            xiaozhi_*.bin
+            build/xiaozhi.elf
+            build/xiaozhi.map
           if-no-files-found: error
 
   publish:
