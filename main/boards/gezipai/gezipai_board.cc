@@ -4,6 +4,11 @@
 #include "application.h"
 #include "button.h"
 #include "config.h"
+#include "display.h"
+
+#if HAVE_LVGL
+#include <lvgl.h>
+#endif
 
 #include <esp_log.h>
 #include <driver/i2c_master.h>
@@ -37,6 +42,18 @@ private:
     int last_adc_raw_ = 0;
     int last_chrg_level_ = -1;
     int last_done_level_ = -1;
+
+    // 无屏板卡仍需初始化 LVGL，否则 Assets 创建 LvglCBinFont 时会因 TLSF 未初始化崩溃
+    static void EnsureLvglInitialized() {
+#if HAVE_LVGL
+        static bool initialized = false;
+        if (!initialized) {
+            lv_init();
+            initialized = true;
+            ESP_LOGI(TAG, "[DISPLAY] LVGL 已初始化（无屏，仅用于字体资源）");
+        }
+#endif
+    }
 
     // 1 秒节拍：LED 翻转 + CHRG/DONE 边沿检测；每 10 拍读一次电池
     static void BatteryTimerCallback(void* arg) {
@@ -269,6 +286,13 @@ public:
           volume_up_button_(VOLUME_UP_BUTTON_GPIO),
           volume_down_button_(VOLUME_DOWN_BUTTON_GPIO) {
         ESP_LOGI(TAG, "Initializing Gezipai Board");
+
+        // 本板无屏，不会创建 LcdDisplay，因此 lv_init() 从未被调用。
+        // 但 2.5.2 的 Assets::LvglStrategy::Apply 会在 display==nullptr 判断之前
+        // 就构造 LvglCBinFont（内部调用 cbin_font_create -> lv_malloc），
+        // TLSF 控制块未初始化时会空指针崩溃（block_locate_free）。
+        // 这里提前初始化 LVGL，只为让字体资源能正常分配/释放，不创建任何界面。
+        EnsureLvglInitialized();
 
         // LED 与 4G 电源脚：板上无 4G 模块，IO17 保持低电平断电
         gpio_config_t out_cfg = {
