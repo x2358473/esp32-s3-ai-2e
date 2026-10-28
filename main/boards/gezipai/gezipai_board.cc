@@ -92,7 +92,7 @@ private:
             ESP_LOGI(TAG, "电池ADC未校准，无法准确读取电压");
         }
 
-        ESP_LOGI(TAG, "电池 raw=%d %dmV %d%% | CHRG(IO%d)=%d DONE(IO%d)=%d | 耳机(IO%d)=%d",
+        ESP_LOGD(TAG, "电池 raw=%d %dmV %d%% | CHRG(IO%d)=%d DONE(IO%d)=%d | 耳机(IO%d)=%d",
                  last_adc_raw_, last_battery_voltage_, last_battery_percentage_,
                  static_cast<int>(CHARGING_GPIO), gpio_get_level(CHARGING_GPIO),
                  static_cast<int>(DONE_GPIO), gpio_get_level(DONE_GPIO),

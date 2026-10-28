@@ -21,7 +21,7 @@ Display::~Display() {
 }
 
 void Display::SetStatus(const char* status) {
-    ESP_LOGW(TAG, "SetStatus: %s", status);
+    ESP_LOGD(TAG, "SetStatus: %s", status);
 }
 
 void Display::ShowNotification(const std::string &notification, int duration_ms) {
@@ -29,7 +29,7 @@ void Display::ShowNotification(const std::string &notification, int duration_ms)
 }
 
 void Display::ShowNotification(const char* notification, int duration_ms) {
-    ESP_LOGW(TAG, "ShowNotification: %s", notification);
+    ESP_LOGD(TAG, "ShowNotification: %s", notification);
 }
 
 void Display::UpdateStatusBar(bool update_all) {
@@ -37,12 +37,12 @@ void Display::UpdateStatusBar(bool update_all) {
 
 
 void Display::SetEmotion(const char* emotion) {
-    ESP_LOGW(TAG, "SetEmotion: %s", emotion);
+    ESP_LOGD(TAG, "SetEmotion: %s", emotion);
 }
 
 void Display::SetChatMessage(const char* role, const char* content) {
-    ESP_LOGW(TAG, "Role:%s", role);
-    ESP_LOGW(TAG, "     %s", content);
+    ESP_LOGD(TAG, "Role:%s", role);
+    ESP_LOGD(TAG, "     %s", content);
 }
 
 void Display::SetTheme(Theme* theme) {
@@ -52,5 +52,5 @@ void Display::SetTheme(Theme* theme) {
 }
 
 void Display::SetPowerSaveMode(bool on) {
-    ESP_LOGW(TAG, "SetPowerSaveMode: %d", on);
+    ESP_LOGD(TAG, "SetPowerSaveMode: %d", on);
 }
