@@ -136,23 +136,25 @@ jobs:
       contents: write
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
 
-      - name: Create or update release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          SHA7="${GITHUB_SHA::7}"
-          TAG="v2.5.2-${SHA7}"
-          echo "== downloaded =="
-          ls -l dist
-          NOTES="gezipai 2.5.2 build, commit ${GITHUB_SHA}, run #${GITHUB_RUN_NUMBER}"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/*.bin --clobber
-          else
-            gh release create "$TAG" dist/*.bin --title "$TAG" --notes "$NOTES"
-          fi
+      - name: Set release tag
+        id: tag
+        run: echo "tag=v2.5.2-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.tag }}
+          files: dist/*.bin
+          overwrite_files: true
+          body: |
+            自动构建产物（xiaozhi 2.5.2 基线 / gezipai）
+
+            - Commit: `${{ github.sha }}`
+            - Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            - 烧录：merged-binary 从 0x0 地址烧录，`esptool.py write_flash 0x0 <bin>`
