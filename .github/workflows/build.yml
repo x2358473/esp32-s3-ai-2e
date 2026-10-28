@@ -113,11 +113,18 @@ jobs:
           fi
           python scripts/build.py "$BOARD" --name "$VARIANT" "${OPTIONS[@]}"
 
+      - name: Rename firmware
+        shell: bash
+        run: |
+          NAME="${{ matrix.ci_name || matrix.full_name }}"
+          cp build/merged-binary.bin "xiaozhi_${NAME}_${GITHUB_SHA::7}.bin"
+          ls -l "xiaozhi_${NAME}_${GITHUB_SHA::7}.bin"
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: xiaozhi_${{ matrix.ci_name || matrix.full_name }}_${{ github.sha }}
-          path: build/merged-binary.bin
+          name: firmware-${{ matrix.ci_name || matrix.full_name }}
+          path: xiaozhi_*.bin
           if-no-files-found: error
 
   publish:
@@ -132,6 +139,7 @@ jobs:
         uses: actions/download-artifact@v5
         with:
           path: dist
+          merge-multiple: true
 
       - name: Create or update release
         env:
@@ -140,18 +148,11 @@ jobs:
           set -euo pipefail
           SHA7="${GITHUB_SHA::7}"
           TAG="v2.5.2-${SHA7}"
-          mkdir -p out
-          for d in dist/*/; do
-            name="$(basename "$d")"
-            board="$(echo "$name" | sed -E 's/^xiaozhi_(.*)_[0-9a-f]{40}$/\1/')"
-            src="$d/merged-binary.bin"
-            [ -f "$src" ] || continue
-            cp "$src" "out/xiaozhi_${board}_${SHA7}.bin"
-          done
-          ls -l out
+          echo "== downloaded =="
+          ls -l dist
           NOTES="gezipai 2.5.2 build, commit ${GITHUB_SHA}, run #${GITHUB_RUN_NUMBER}"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" out/*.bin --clobber
+            gh release upload "$TAG" dist/*.bin --clobber
           else
-            gh release create "$TAG" out/*.bin --title "$TAG" --notes "$NOTES"
+            gh release create "$TAG" dist/*.bin --title "$TAG" --notes "$NOTES"
           fi
