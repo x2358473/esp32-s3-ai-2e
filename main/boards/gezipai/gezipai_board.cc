@@ -46,6 +46,7 @@ private:
     esp_timer_handle_t battery_timer_;
     int last_battery_voltage_;
     int last_battery_percentage_;
+    int last_adc_raw_ = 0;
     bool led_on_ = false;
 
     // 电池定时器回调函数
@@ -79,9 +80,11 @@ private:
             ESP_LOGI(TAG, "电池ADC未校准，无法准确读取电压");
         }
 
-        ESP_LOGI(TAG, "充电脚电平 IO%d(CHRG)=%d IO%d(DONE)=%d",
+        ESP_LOGI(TAG, "电池 raw=%d %dmV %d%% | CHRG(IO%d)=%d DONE(IO%d)=%d | 耳机(IO%d)=%d",
+                 last_adc_raw_, last_battery_voltage_, last_battery_percentage_,
                  static_cast<int>(CHARGING_GPIO), gpio_get_level(CHARGING_GPIO),
-                 static_cast<int>(DONE_GPIO), gpio_get_level(DONE_GPIO));
+                 static_cast<int>(DONE_GPIO), gpio_get_level(DONE_GPIO),
+                 static_cast<int>(EARPHONE_CK_PIN), gpio_get_level(EARPHONE_CK_PIN));
     }
 
     void InitializeCodecI2c()
@@ -118,6 +121,7 @@ private:
     {
         boot_button_.OnClick([this]()
                              {
+            ESP_LOGI(TAG, "[KEY] BOOT click");
             auto& app = Application::GetInstance();
             if (GetNetworkType() == NetworkType::WIFI) {
                 if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
@@ -130,11 +134,13 @@ private:
 
         boot_button_.OnLongPress([this]()
                                  {
+            ESP_LOGI(TAG, "[KEY] BOOT long press -> switch network");
             auto& app = Application::GetInstance();            
             SwitchNetworkType(); });
 
         boot_button_2_.OnClick([this]()
             {
+            ESP_LOGI(TAG, "[KEY] BOOT2 click");
             auto& app = Application::GetInstance();
             if (GetNetworkType() == NetworkType::WIFI) {
             if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
@@ -146,12 +152,14 @@ private:
             app.ToggleChatState(); });
 
         boot_button_2_.OnLongPress([this]()
-                            {
+                           {
+            ESP_LOGI(TAG, "[KEY] BOOT2 long press -> switch network");
             auto& app = Application::GetInstance();            
             SwitchNetworkType(); });
 
         volume_up_button_.OnClick([this]()
                                   {
+            ESP_LOGI(TAG, "[KEY] VOL+ click");
             auto codec = GetAudioCodec();
             auto volume = codec->output_volume() + 10;
             if (volume > 100) {
@@ -162,11 +170,13 @@ private:
 
         volume_up_button_.OnLongPress([this]()
                                       {
+            ESP_LOGI(TAG, "[KEY] VOL+ long press");
             GetAudioCodec()->SetOutputVolume(100);
             GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME); });
 
         volume_down_button_.OnClick([this]()
                                     {
+            ESP_LOGI(TAG, "[KEY] VOL- click");
             auto codec = GetAudioCodec();
             auto volume = codec->output_volume() - 10;
             if (volume < 0) {
@@ -177,6 +187,7 @@ private:
 
         volume_down_button_.OnLongPress([this]()
                                         {
+            ESP_LOGI(TAG, "[KEY] VOL- long press");
             GetAudioCodec()->SetOutputVolume(0);
             GetDisplay()->ShowNotification(Lang::Strings::MUTED); });
     }
@@ -315,6 +326,7 @@ private:
             sum += adc_raw;
         }
         adc_raw = sum / 10;
+        last_adc_raw_ = adc_raw;
 
         // ESP_LOGI(TAG, "电池ADC原始数据: %d", adc_raw);
 
@@ -384,12 +396,42 @@ public:
         };
         ESP_ERROR_CHECK(gpio_config(&status_config));
 
+        // 耳机插入检测（低有效），仅用于日志验证
+        gpio_config_t earphone_config = {
+            .pin_bit_mask = 1ULL << EARPHONE_CK_PIN,
+            .mode = GPIO_MODE_INPUT,
+            .pull_up_en = GPIO_PULLUP_ENABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_DISABLE,
+        };
+        ESP_ERROR_CHECK(gpio_config(&earphone_config));
+
         InitializeCodecI2c();
         InitializeSpi();
         InitializeButtons();
         InitializeSt7789Display();
         InitializeTools();
         InitializeBatteryAdc();
+
+        // 启动自检：确认编译进固件的音频链路配置（AEC 关闭会导致语音打断退化）
+#ifdef CONFIG_USE_DEVICE_AEC
+        ESP_LOGI(TAG, "[SELFTEST] device AEC = ON");
+#else
+        ESP_LOGW(TAG, "[SELFTEST] device AEC = OFF (语音打断会退化)");
+#endif
+#ifdef CONFIG_USE_AFE_WAKE_WORD
+        ESP_LOGI(TAG, "[SELFTEST] wake word = AFE");
+#elif defined(CONFIG_USE_CUSTOM_WAKE_WORD)
+        ESP_LOGI(TAG, "[SELFTEST] wake word = custom");
+#else
+        ESP_LOGW(TAG, "[SELFTEST] wake word = disabled");
+#endif
+#ifdef CONFIG_SEND_WAKE_WORD_DATA
+        ESP_LOGI(TAG, "[SELFTEST] send wake word data = ON");
+#endif
+        ESP_LOGI(TAG, "[SELFTEST] 4G power(IO%d)=%d, adc calibrated=%d",
+                 static_cast<int>(MODULE_4G_POWER_GPIO), gpio_get_level(MODULE_4G_POWER_GPIO),
+                 static_cast<int>(adc_calibrated_));
 
         // 初始读取一次电量
         UpdateBatteryStatus();
