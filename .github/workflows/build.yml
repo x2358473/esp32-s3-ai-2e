@@ -116,14 +116,24 @@ jobs:
       - name: Rename firmware
         shell: bash
         run: |
+          set -euo pipefail
+          source "${IDF_PATH}/export.sh" >/dev/null 2>&1 || true
           NAME="${{ matrix.ci_name || matrix.full_name }}"
           SHA7="${GITHUB_SHA::7}"
           cp build/merged-binary.bin "xiaozhi_${NAME}_${SHA7}.bin"
+
           # assets 分区单独烧录，缺少会导致模型加载后 AFE 初始化崩溃
           if [ -f build/generated_assets.bin ]; then
             cp build/generated_assets.bin "xiaozhi_${NAME}_${SHA7}_assets.bin"
+            # 合并成单文件（0x0 起，含 assets 分区），供 ESP Web Tools 等只能刷单文件的方式使用
+            if command -v esptool.py >/dev/null 2>&1; then ET=esptool.py; else ET="python -m esptool"; fi
+            $ET --chip esp32s3 merge_bin \
+              -o "xiaozhi_${NAME}_${SHA7}_full.bin" \
+              --flash_mode dio --flash_freq 80m --flash_size 16MB \
+              0x0 build/merged-binary.bin \
+              0x800000 build/generated_assets.bin
           else
-            echo "::warning::build/generated_assets.bin not found, assets partition will not be updated"
+            echo "::warning::build/generated_assets.bin not found, assets partition will not be included"
           fi
           ls -l xiaozhi_*.bin
 
@@ -165,12 +175,20 @@ jobs:
             - Commit: `${{ github.sha }}`
             - Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-            烧录（两个文件都要写，缺 assets 会在模型加载后崩溃）：
+            包含三个文件：
+
+            - `xiaozhi_gezipai_<sha>_full.bin` —— **完整镜像**（0x0 起，已含 assets 分区），ESP Web Tools / 网页刷机用这个
+            - `xiaozhi_gezipai_<sha>.bin` —— 仅 app（bootloader + 分区表 + 应用）
+            - `xiaozhi_gezipai_<sha>_assets.bin` —— assets 分区（0x800000），与 app 配套
+
+            命令行烧录（app + assets 分开写）：
 
             ```
             esptool.py --chip esp32s3 -p <COM> -b 460800 write_flash \
               0x0       xiaozhi_gezipai_<sha>.bin \
               0x800000  xiaozhi_gezipai_<sha>_assets.bin
             ```
+
+            Web 工具烧录：直接选 `_full.bin`（大小约 8.6MB，写入会慢一些）。
 
             从旧版本升级建议先 `esptool.py erase_flash`，否则 assets 分区残留会与新固件不匹配。
