@@ -48,7 +48,11 @@ jobs:
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           CHANGED_FILE="$RUNNER_TEMP/changed-files.txt"
-          if [[ "$EVENT_NAME" == "workflow_dispatch" && -n "$INPUT_BOARD" && "$INPUT_BOARD" != "all" ]]; then
+          if [[ "$GITHUB_REF" == "refs/heads/v252-baseline" || "$GITHUB_REF" == refs/heads/baseline/* ]]; then
+            # 2.5.2 升级验证分支：孤儿分支无共同祖先，且 Kconfig/CMakeLists 属 common change，
+            # 两者都会导致全量 matrix；这里固定只编 gezipai
+            git ls-files "main/boards/gezipai" > "$CHANGED_FILE"
+          elif [[ "$EVENT_NAME" == "workflow_dispatch" && -n "$INPUT_BOARD" && "$INPUT_BOARD" != "all" ]]; then
             # 手动触发指定板卡：只把该板卡目录当作变更，避免全量 matrix
             git ls-files "main/boards/$INPUT_BOARD" > "$CHANGED_FILE"
           elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
