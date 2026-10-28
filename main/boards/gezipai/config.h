@@ -14,8 +14,11 @@
 
 #include <driver/gpio.h>
 
-#define AUDIO_INPUT_SAMPLE_RATE 16000
-#define AUDIO_OUTPUT_SAMPLE_RATE 16000
+// 与服务端 TTS 的 24kHz 对齐：输出不再需要 24k->16k 降采样，音质更好且省一次重采样。
+// BoxAudioCodec 要求输入输出采样率相等；AFE 仍固定 16k，由 AudioService 的
+// input_resampler 负责 24k->16k。
+#define AUDIO_INPUT_SAMPLE_RATE 24000
+#define AUDIO_OUTPUT_SAMPLE_RATE 24000
 
 #define AUDIO_I2S_GPIO_MCLK GPIO_NUM_40
 #define AUDIO_I2S_GPIO_WS GPIO_NUM_45

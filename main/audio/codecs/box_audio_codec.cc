@@ -102,7 +102,9 @@ void BoxAudioCodec::CreateDuplexChannels(gpio_num_t mclk, gpio_num_t bclk, gpio_
         .id = I2S_NUM_0,
         .role = I2S_ROLE_MASTER,
         .dma_desc_num = AUDIO_CODEC_DMA_DESC_NUM,
-        .dma_frame_num = AUDIO_CODEC_DMA_FRAME_NUM,
+        // 缓冲时长按采样率保持不变（基准 16k / 240 帧 ≈ 90ms）。
+        // 否则 24k 板卡缓冲时长会掉到 60ms，TTS 播放容易欠载破音。
+        .dma_frame_num = AUDIO_CODEC_DMA_FRAME_NUM * output_sample_rate_ / 16000,
         .auto_clear_after_cb = true,
         .auto_clear_before_cb = false,
         .intr_priority = 0,
