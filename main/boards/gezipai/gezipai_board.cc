@@ -47,8 +47,6 @@ private:
     int last_adc_raw_ = 0;
     int last_chrg_level_ = -1;
     int last_done_level_ = -1;
-    int last_alt41_level_ = -1;
-    int last_alt14_level_ = -1;
 
     // 电池定时器回调函数
     static void BatteryTimerCallback(void *arg)
@@ -58,20 +56,15 @@ private:
         timer_count_++;
 
         // CHRG/DONE 电平变化即时打印（1 秒采样，避免 10 秒采样漏掉充电启停）
-        // 同时监测厂商固件曾使用的 IO41/IO14，用于确认充电状态脚究竟是哪一组
         int chrg = gpio_get_level(CHARGING_GPIO);
         int done = gpio_get_level(DONE_GPIO);
-        int alt41 = gpio_get_level(GPIO_NUM_41);
-        int alt14 = gpio_get_level(GPIO_NUM_14);
-        if (chrg != board->last_chrg_level_ || done != board->last_done_level_ ||
-            alt41 != board->last_alt41_level_ || alt14 != board->last_alt14_level_)
+        if (chrg != board->last_chrg_level_ || done != board->last_done_level_)
         {
-            ESP_LOGI(TAG, "[CHG] IO8=%d IO19=%d IO41=%d IO14=%d (电平变化)",
-                     chrg, done, alt41, alt14);
+            ESP_LOGI(TAG, "[CHG] CHRG(IO%d)=%d DONE(IO%d)=%d (电平变化)",
+                     static_cast<int>(CHARGING_GPIO), chrg,
+                     static_cast<int>(DONE_GPIO), done);
             board->last_chrg_level_ = chrg;
             board->last_done_level_ = done;
-            board->last_alt41_level_ = alt41;
-            board->last_alt14_level_ = alt14;
         }
 
         if (timer_count_ >= 10)
@@ -99,11 +92,10 @@ private:
             ESP_LOGI(TAG, "电池ADC未校准，无法准确读取电压");
         }
 
-        ESP_LOGI(TAG, "电池 raw=%d %dmV %d%% | CHRG(IO%d)=%d DONE(IO%d)=%d | 备查 IO41=%d IO14=%d | 耳机(IO%d)=%d",
+        ESP_LOGI(TAG, "电池 raw=%d %dmV %d%% | CHRG(IO%d)=%d DONE(IO%d)=%d | 耳机(IO%d)=%d",
                  last_adc_raw_, last_battery_voltage_, last_battery_percentage_,
                  static_cast<int>(CHARGING_GPIO), gpio_get_level(CHARGING_GPIO),
                  static_cast<int>(DONE_GPIO), gpio_get_level(DONE_GPIO),
-                 gpio_get_level(GPIO_NUM_41), gpio_get_level(GPIO_NUM_14),
                  static_cast<int>(EARPHONE_CK_PIN), gpio_get_level(EARPHONE_CK_PIN));
     }
 
@@ -366,16 +358,6 @@ public:
             .intr_type = GPIO_INTR_DISABLE,
         };
         ESP_ERROR_CHECK(gpio_config(&status_config));
-
-        // 诊断用：厂商固件原本把充电状态写成 IO41/IO14，这里一并上拉读回，用于确认哪组才是真实的
-        gpio_config_t alt_status_config = {
-            .pin_bit_mask = 1ULL << GPIO_NUM_41 | 1ULL << GPIO_NUM_14,
-            .mode = GPIO_MODE_INPUT,
-            .pull_up_en = GPIO_PULLUP_ENABLE,
-            .pull_down_en = GPIO_PULLDOWN_DISABLE,
-            .intr_type = GPIO_INTR_DISABLE,
-        };
-        ESP_ERROR_CHECK(gpio_config(&alt_status_config));
 
         // 耳机插入检测（低有效），仅用于日志验证
         gpio_config_t earphone_config = {
