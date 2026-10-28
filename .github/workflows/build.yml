@@ -125,13 +125,12 @@ jobs:
           # assets 分区单独烧录，缺少会导致模型加载后 AFE 初始化崩溃
           if [ -f build/generated_assets.bin ]; then
             cp build/generated_assets.bin "xiaozhi_${NAME}_${SHA7}_assets.bin"
-            # 合并成单文件（0x0 起，含 assets 分区），供 ESP Web Tools 等只能刷单文件的方式使用
-            if command -v esptool.py >/dev/null 2>&1; then ET=esptool.py; else ET="python -m esptool"; fi
-            $ET --chip esp32s3 merge_bin \
-              -o "xiaozhi_${NAME}_${SHA7}_full.bin" \
-              --flash_mode dio --flash_freq 80m --flash_size 16MB \
-              0x0 build/merged-binary.bin \
-              0x800000 build/generated_assets.bin
+            # merged-binary 已延伸到 0x800000 之后，无法再用 merge-bin（会报 overlap），
+            # 这里按偏移覆盖生成单文件完整镜像，供网页刷机使用。
+            python scripts/make_full_image.py \
+              build/merged-binary.bin \
+              build/generated_assets.bin \
+              "xiaozhi_${NAME}_${SHA7}_full.bin"
           else
             echo "::warning::build/generated_assets.bin not found, assets partition will not be included"
           fi
