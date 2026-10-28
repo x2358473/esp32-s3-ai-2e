@@ -48,30 +48,18 @@ jobs:
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           CHANGED_FILE="$RUNNER_TEMP/changed-files.txt"
-          if [[ "$GITHUB_REF" == "refs/heads/v252-baseline" || "$GITHUB_REF" == refs/heads/baseline/* ]]; then
-            # 2.5.2 升级验证分支：孤儿分支无共同祖先，且 Kconfig/CMakeLists 属 common change，
-            # 两者都会导致全量 matrix；这里固定只编 gezipai
-            git ls-files "main/boards/gezipai" > "$CHANGED_FILE"
-          elif [[ "$EVENT_NAME" == "workflow_dispatch" && -n "$INPUT_BOARD" && "$INPUT_BOARD" != "all" ]]; then
-            # 手动触发指定板卡：只把该板卡目录当作变更，避免全量 matrix
-            git ls-files "main/boards/$INPUT_BOARD" > "$CHANGED_FILE"
-          elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && "$INPUT_BOARD" == "all" ]]; then
+            # 手动触发并显式要求全量时才编译所有变体
             git ls-files > "$CHANGED_FILE"
           elif [[ "$EVENT_NAME" == "pull_request" ]]; then
             # Checkout is the synthetic merge commit. Compare the PR branch
             # from its merge base, excluding unrelated updates on main.
             git diff --name-only --no-renames HEAD^1...HEAD^2 > "$CHANGED_FILE"
-          elif [[ "$BEFORE_SHA" =~ ^0+$ && "$GITHUB_REF" != "refs/heads/main" ]] && \
-               BASE_SHA=$(git merge-base HEAD origin/main); then
-            # First push of a ci/* branch has an all-zero before SHA.
-            git diff --name-only --no-renames "$BASE_SHA" HEAD > "$CHANGED_FILE"
-          elif [[ -n "$BEFORE_SHA" && ! "$BEFORE_SHA" =~ ^0+$ ]] && \
-               git cat-file -e "$BEFORE_SHA^{commit}" 2>/dev/null; then
-            git diff --name-only --no-renames "$BEFORE_SHA" HEAD > "$CHANGED_FILE"
           else
-            # A missing baseline (e.g. an unavailable force-pushed commit)
-            # must not silently omit changed boards.
-            git ls-files > "$CHANGED_FILE"
+            # 本仓库只维护 gezipai 一块板：push 与手动触发都只编译它，
+            # 避免 Kconfig / CMakeLists 等公共文件变更触发代表性变体矩阵。
+            BOARD_SEL="${INPUT_BOARD:-gezipai}"
+            git ls-files "main/boards/$BOARD_SEL" > "$CHANGED_FILE"
           fi
 
           cat "$CHANGED_FILE"
@@ -112,23 +100,17 @@ jobs:
           fi
           python scripts/build.py "$BOARD" --name "$VARIANT" "${OPTIONS[@]}"
 
-      - name: Rename binary
-        shell: bash
-        run: |
-          mv build/merged-binary.bin "build/xiaozhi_${{ matrix.name }}_${GITHUB_SHA::7}.bin"
-          ls -lh build/*.bin
-
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
           name: xiaozhi_${{ matrix.ci_name || matrix.full_name }}_${{ github.sha }}
-          path: build/xiaozhi_*.bin
+          path: build/merged-binary.bin
           if-no-files-found: error
 
   publish:
     name: Publish release
-    needs: build
-    if: ${{ github.event_name == 'push' }}
+    needs: [prepare, build]
+    if: ${{ needs.prepare.outputs.variants != '[]' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -137,17 +119,26 @@ jobs:
         uses: actions/download-artifact@v5
         with:
           path: dist
-          pattern: xiaozhi_*
-          merge-multiple: true
 
       - name: Create or update release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          ls -lh dist
-          TAG="v2.5.2-${GITHUB_SHA::7}"
-          gh release create "$TAG" dist/*.bin \
-            --repo "${{ github.repository }}" \
-            --title "$TAG" \
-            --notes "gezipai on upstream v2.5.2 (branch ${GITHUB_REF_NAME})" \
-            || gh release upload "$TAG" dist/*.bin --repo "${{ github.repository }}" --clobber
+          set -euo pipefail
+          SHA7="${GITHUB_SHA::7}"
+          TAG="v2.5.2-${SHA7}"
+          mkdir -p out
+          for d in dist/*/; do
+            name="$(basename "$d")"
+            board="$(echo "$name" | sed -E 's/^xiaozhi_(.*)_[0-9a-f]{40}$/\1/')"
+            src="$d/merged-binary.bin"
+            [ -f "$src" ] || continue
+            cp "$src" "out/xiaozhi_${board}_${SHA7}.bin"
+          done
+          ls -l out
+          NOTES="gezipai 2.5.2 build, commit ${GITHUB_SHA}, run #${GITHUB_RUN_NUMBER}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" out/*.bin --clobber
+          else
+            gh release create "$TAG" out/*.bin --title "$TAG" --notes "$NOTES"
+          fi
