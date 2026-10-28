@@ -1,0 +1,15 @@
+{
+    "type": "gezipai",
+    "target": "esp32s3",
+    "builds": [
+        {
+            "name": "gezipai",
+            "sdkconfig_append": [
+                "CONFIG_USE_AUDIO_PROCESSOR=y",
+                "CONFIG_USE_DEVICE_AEC=y",
+                "CONFIG_USE_AFE_WAKE_WORD=y",
+                "CONFIG_SEND_WAKE_WORD_DATA=y"
+            ]
+        }
+    ]
+}
