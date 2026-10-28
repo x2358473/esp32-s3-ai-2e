@@ -1823,7 +1823,10 @@ def main(argv: Optional[list[str]] = None) -> None:
         selected = _select_variants_for_changes(variants, sys.stdin.read().splitlines())
         board_filter = os.environ.get("XIAOZHI_BOARD_FILTER", "").strip()
         if board_filter:
-            selected = [v for v in selected if v.get("board") == board_filter]
+            # 只保留指定板卡：直接基于全部变体筛选。
+            # 若在 selected 上过滤，公共文件（workflow/scripts）变更只会选中代表性变体，
+            # 过滤后可能为空，导致 build job 被整体跳过。
+            selected = [v for v in variants if v.get("board") == board_filter]
         print(json.dumps(selected))
         return
 
