@@ -1821,6 +1821,9 @@ def main(argv: Optional[list[str]] = None) -> None:
         idf_version = _detect_idf_version_for_listing()
         variants = _collect_variants(config_filename=args.config, idf_version=idf_version)
         selected = _select_variants_for_changes(variants, sys.stdin.read().splitlines())
+        board_filter = os.environ.get("XIAOZHI_BOARD_FILTER", "").strip()
+        if board_filter:
+            selected = [v for v in selected if v.get("board") == board_filter]
         print(json.dumps(selected))
         return
 

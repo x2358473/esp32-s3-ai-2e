@@ -48,18 +48,31 @@ jobs:
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           CHANGED_FILE="$RUNNER_TEMP/changed-files.txt"
-          if [[ "$EVENT_NAME" == "workflow_dispatch" && "$INPUT_BOARD" == "all" ]]; then
-            # 手动触发并显式要求全量时才编译所有变体
+          # 本仓库只维护 gezipai：除非手动触发并指定 all，否则只编译该板卡变体。
+          # 过滤在 build.py 内完成（XIAOZHI_BOARD_FILTER），变更文件列表保持上游语义。
+          BOARD_FILTER="${INPUT_BOARD:-gezipai}"
+          if [[ "$BOARD_FILTER" == "all" ]]; then
+            export XIAOZHI_BOARD_FILTER=""
+          else
+            export XIAOZHI_BOARD_FILTER="$BOARD_FILTER"
+          fi
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             git ls-files > "$CHANGED_FILE"
           elif [[ "$EVENT_NAME" == "pull_request" ]]; then
             # Checkout is the synthetic merge commit. Compare the PR branch
             # from its merge base, excluding unrelated updates on main.
             git diff --name-only --no-renames HEAD^1...HEAD^2 > "$CHANGED_FILE"
+          elif [[ "$BEFORE_SHA" =~ ^0+$ && "$GITHUB_REF" != "refs/heads/main" ]] && \
+               BASE_SHA=$(git merge-base HEAD origin/main); then
+            # First push of a ci/* branch has an all-zero before SHA.
+            git diff --name-only --no-renames "$BASE_SHA" HEAD > "$CHANGED_FILE"
+          elif [[ -n "$BEFORE_SHA" && ! "$BEFORE_SHA" =~ ^0+$ ]] && \
+               git cat-file -e "$BEFORE_SHA^{commit}" 2>/dev/null; then
+            git diff --name-only --no-renames "$BEFORE_SHA" HEAD > "$CHANGED_FILE"
           else
-            # 本仓库只维护 gezipai 一块板：push 与手动触发都只编译它，
-            # 避免 Kconfig / CMakeLists 等公共文件变更触发代表性变体矩阵。
-            BOARD_SEL="${INPUT_BOARD:-gezipai}"
-            git ls-files "main/boards/$BOARD_SEL" > "$CHANGED_FILE"
+            # A missing baseline (e.g. an unavailable force-pushed commit)
+            # must not silently omit changed boards.
+            git ls-files > "$CHANGED_FILE"
           fi
 
           cat "$CHANGED_FILE"
