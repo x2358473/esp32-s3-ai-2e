@@ -33,12 +33,10 @@ LV_FONT_DECLARE(font_awesome_20_4);
 class GezipaiBoard : public DualNetworkBoard
 {
 private:
-    i2c_master_bus_handle_t display_i2c_bus_;
     Button boot_button_;
     Button boot_button_2_;
     Button volume_up_button_;
     Button volume_down_button_;
-    LcdDisplay *display_;
     i2c_master_bus_handle_t codec_i2c_bus_;
     adc_oneshot_unit_handle_t adc1_handle_;
     adc_cali_handle_t adc1_cali_handle_;
@@ -47,16 +45,30 @@ private:
     int last_battery_voltage_;
     int last_battery_percentage_;
     int last_adc_raw_ = 0;
-    bool led_on_ = false;
+    int last_chrg_level_ = -1;
+    int last_done_level_ = -1;
 
     // 电池定时器回调函数
     static void BatteryTimerCallback(void *arg)
     {
+        GezipaiBoard *board = static_cast<GezipaiBoard *>(arg);
         static uint8_t timer_count_;
         timer_count_++;
+
+        // CHRG/DONE 电平变化即时打印（1 秒采样，避免 10 秒采样漏掉充电启停）
+        int chrg = gpio_get_level(CHARGING_GPIO);
+        int done = gpio_get_level(DONE_GPIO);
+        if (chrg != board->last_chrg_level_ || done != board->last_done_level_)
+        {
+            ESP_LOGI(TAG, "[CHG] CHRG(IO%d)=%d DONE(IO%d)=%d (电平变化)",
+                     static_cast<int>(CHARGING_GPIO), chrg,
+                     static_cast<int>(DONE_GPIO), done);
+            board->last_chrg_level_ = chrg;
+            board->last_done_level_ = done;
+        }
+
         if (timer_count_ >= 10)
         {
-            GezipaiBoard *board = static_cast<GezipaiBoard *>(arg);
             board->UpdateBatteryStatus();
             timer_count_ = 0;
         }
@@ -105,18 +117,6 @@ private:
         ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_cfg, &codec_i2c_bus_));
     }
 
-    void InitializeSpi()
-    {
-        spi_bus_config_t buscfg = {};
-        buscfg.mosi_io_num = DISPLAY_SPI_MOSI_PIN;
-        buscfg.miso_io_num = GPIO_NUM_NC;
-        buscfg.sclk_io_num = DISPLAY_SPI_SCK_PIN;
-        buscfg.quadwp_io_num = GPIO_NUM_NC;
-        buscfg.quadhd_io_num = GPIO_NUM_NC;
-        buscfg.max_transfer_sz = DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(uint16_t);
-        ESP_ERROR_CHECK(spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO));
-    }
-
     void InitializeButtons()
     {
         boot_button_.OnClick([this]()
@@ -134,9 +134,7 @@ private:
 
         boot_button_.OnLongPress([this]()
                                  {
-            ESP_LOGI(TAG, "[KEY] BOOT long press -> switch network");
-            auto& app = Application::GetInstance();            
-            SwitchNetworkType(); });
+            ESP_LOGI(TAG, "[KEY] BOOT long press (4G disabled, ignored)"); });
 
         boot_button_2_.OnClick([this]()
             {
@@ -153,9 +151,7 @@ private:
 
         boot_button_2_.OnLongPress([this]()
                            {
-            ESP_LOGI(TAG, "[KEY] BOOT2 long press -> switch network");
-            auto& app = Application::GetInstance();            
-            SwitchNetworkType(); });
+            ESP_LOGI(TAG, "[KEY] BOOT2 long press (4G disabled, ignored)"); });
 
         volume_up_button_.OnClick([this]()
                                   {
@@ -190,39 +186,6 @@ private:
             ESP_LOGI(TAG, "[KEY] VOL- long press");
             GetAudioCodec()->SetOutputVolume(0);
             GetDisplay()->ShowNotification(Lang::Strings::MUTED); });
-    }
-
-    void InitializeSt7789Display()
-    {
-        esp_lcd_panel_io_handle_t panel_io = nullptr;
-        esp_lcd_panel_handle_t panel = nullptr;
-        // 液晶屏控制IO初始化
-        ESP_LOGD(TAG, "Install panel IO");
-        esp_lcd_panel_io_spi_config_t io_config = {};
-        io_config.cs_gpio_num = DISPLAY_SPI_CS_PIN;
-        io_config.dc_gpio_num = DISPLAY_DC_PIN;
-        io_config.spi_mode = 3;
-        io_config.pclk_hz = 80 * 1000 * 1000;
-        io_config.trans_queue_depth = 10;
-        io_config.lcd_cmd_bits = 8;
-        io_config.lcd_param_bits = 8;
-        ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(SPI3_HOST, &io_config, &panel_io));
-
-        // 初始化液晶屏驱动芯片ST7789
-        ESP_LOGD(TAG, "Install LCD driver");
-        esp_lcd_panel_dev_config_t panel_config = {};
-        panel_config.reset_gpio_num = DISPLAY_RES;
-        panel_config.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB;
-        panel_config.bits_per_pixel = 16;
-        ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(panel_io, &panel_config, &panel));
-        ESP_ERROR_CHECK(esp_lcd_panel_reset(panel));
-        ESP_ERROR_CHECK(esp_lcd_panel_init(panel));
-        ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY));
-        ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y));
-        ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel, true));
-
-        display_ = new SpiLcdDisplay(panel_io, panel,
-                                     DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
     void InitializeTools()
@@ -347,8 +310,8 @@ private:
             return -1; // 返回-1表示无法读取
         }
 
-        // 假设电池电压范围为3.0V-4.2V
-        const int min_voltage = 3000; // 3.0V
+        // 锂电池有效电压范围 3.3V-4.2V
+        const int min_voltage = 3300; // 3.3V
         const int max_voltage = 4200; // 4.2V
 
         if (voltage < min_voltage)
@@ -384,7 +347,7 @@ public:
         };
         ESP_ERROR_CHECK(gpio_config(&led_config));
 
-        gpio_set_level(MODULE_4G_POWER_GPIO, 1);
+        gpio_set_level(MODULE_4G_POWER_GPIO, 0);   // 板上无 4G 模块，保持断电
 
         // CHRG 为充电芯片开漏输出，需内部上拉；DONE 与 USB D-(IO19) 复用，不加上拉以免影响 USB
         gpio_config_t status_config = {
@@ -407,9 +370,7 @@ public:
         ESP_ERROR_CHECK(gpio_config(&earphone_config));
 
         InitializeCodecI2c();
-        InitializeSpi();
         InitializeButtons();
-        InitializeSt7789Display();
         InitializeTools();
         InitializeBatteryAdc();
 
@@ -438,8 +399,6 @@ public:
 
         // 启动定时器定
         InitializeTimer();
-
-        GetBacklight()->RestoreBrightness();
     }
 
     ~GezipaiBoard()
@@ -488,17 +447,6 @@ public:
         return &audio_codec;
     }
 
-    virtual Display *GetDisplay() override
-    {
-        return display_;
-    }
-
-    virtual Backlight *GetBacklight() override
-    {
-        static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
-        return &backlight;
-    }
-
     // 获取最后一次读取的电池电压(mV)
     int GetBatteryVoltage()
     {
@@ -510,23 +458,9 @@ public:
     {
         level = last_battery_percentage_;
 
-        uint8_t chargeLevel = gpio_get_level(CHARGING_GPIO);
-        uint8_t doneLevel = gpio_get_level(DONE_GPIO);
-        if (chargeLevel == 0 && doneLevel == 0)
-        {
-            charging = false;
-            discharging = true;
-        }
-        else if (chargeLevel == 0 && doneLevel == 1)
-        {
-            charging = true;
-            discharging = false;
-        }
-        else if (chargeLevel == 1 && doneLevel == 0)
-        {
-            charging = false;
-            discharging = true;
-        }
+        // CHRG 为充电芯片开漏输出：低电平 = 充电中；DONE 与 USB D-(IO19) 复用，插 USB 时不可信，不参与判断
+        charging = (gpio_get_level(CHARGING_GPIO) == 0);
+        discharging = !charging;
 
         return true;
     }
