@@ -117,8 +117,15 @@ jobs:
         shell: bash
         run: |
           NAME="${{ matrix.ci_name || matrix.full_name }}"
-          cp build/merged-binary.bin "xiaozhi_${NAME}_${GITHUB_SHA::7}.bin"
-          ls -l "xiaozhi_${NAME}_${GITHUB_SHA::7}.bin"
+          SHA7="${GITHUB_SHA::7}"
+          cp build/merged-binary.bin "xiaozhi_${NAME}_${SHA7}.bin"
+          # assets 分区单独烧录，缺少会导致模型加载后 AFE 初始化崩溃
+          if [ -f build/generated_assets.bin ]; then
+            cp build/generated_assets.bin "xiaozhi_${NAME}_${SHA7}_assets.bin"
+          else
+            echo "::warning::build/generated_assets.bin not found, assets partition will not be updated"
+          fi
+          ls -l xiaozhi_*.bin
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
@@ -157,4 +164,13 @@ jobs:
 
             - Commit: `${{ github.sha }}`
             - Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-            - 烧录：merged-binary 从 0x0 地址烧录，`esptool.py write_flash 0x0 <bin>`
+
+            烧录（两个文件都要写，缺 assets 会在模型加载后崩溃）：
+
+            ```
+            esptool.py --chip esp32s3 -p <COM> -b 460800 write_flash \
+              0x0       xiaozhi_gezipai_<sha>.bin \
+              0x800000  xiaozhi_gezipai_<sha>_assets.bin
+            ```
+
+            从旧版本升级建议先 `esptool.py erase_flash`，否则 assets 分区残留会与新固件不匹配。
