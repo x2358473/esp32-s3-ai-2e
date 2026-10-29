@@ -14,11 +14,13 @@
 
 #include <driver/gpio.h>
 
-// 与服务端 TTS 的 24kHz 对齐：输出不再需要 24k->16k 降采样，音质更好且省一次重采样。
-// BoxAudioCodec 要求输入输出采样率相等；AFE 仍固定 16k，由 AudioService 的
-// input_resampler 负责 24k->16k。
-#define AUDIO_INPUT_SAMPLE_RATE 24000
-#define AUDIO_OUTPUT_SAMPLE_RATE 24000
+// 自部署的开源后端（xiaozhi-server）只支持 16k，设备侧保持 16k 可避免
+// "Server sample rate 16000 does not match device output sample rate 24000"
+// 的双向重采样。
+// 官方云服务是 24k，若要切回官方服务端，把这两个宏改成 24000 即可。
+// BoxAudioCodec 要求输入输出采样率相等；AFE 固定 16k。
+#define AUDIO_INPUT_SAMPLE_RATE 16000
+#define AUDIO_OUTPUT_SAMPLE_RATE 16000
 
 #define AUDIO_I2S_GPIO_MCLK GPIO_NUM_40
 #define AUDIO_I2S_GPIO_WS GPIO_NUM_45
