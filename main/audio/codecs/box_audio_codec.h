@@ -38,6 +38,8 @@ public:
                   float reference_gain = 0.0f, uint32_t i2c_clock_speed = 0);
     virtual ~BoxAudioCodec();
 
+    bool IsReady() const { return init_ok_; }
+
     virtual void SetOutputVolume(int volume) override;
     virtual void EnableInput(bool enable) override;
     virtual void EnableOutput(bool enable) override;

@@ -240,6 +240,20 @@ public:
             AUDIO_CODEC_PA_PIN, AUDIO_CODEC_ES8311_ADDR, AUDIO_CODEC_ES7210_ADDR,
             AUDIO_INPUT_REFERENCE, 30.0f, -1, 0.0f, 400000);
         selected = &audio_codec;
+
+        // 若 codec 初始化失败，此时 I2S 已在运行（MCLK/BCLK 正在翻转）。
+        // 再测一次 400kHz，用于区分"I2S 时钟串扰"与"驱动内部速率未生效"：
+        //   补测 10/10 → 不是串扰，问题在 esp_codec_dev 内部
+        //   补测 0/10  → 确认 I2S 干扰，需调整初始化顺序或走线
+        if (!audio_codec.IsReady()) {
+            int after_i2s = 0;
+            for (int i = 0; i < 10; i++) {
+                if (ReadCodecReg(AUDIO_CODEC_ES8311_ADDR, "ES8311", true, 400000)) {
+                    after_i2s++;
+                }
+            }
+            ESP_LOGW(TAG, "after i2s start, 400kHz read: %d/10", after_i2s);
+        }
         return selected;
     }
 
