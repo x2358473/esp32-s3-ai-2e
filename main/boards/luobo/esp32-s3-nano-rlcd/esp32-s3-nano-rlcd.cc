@@ -3,8 +3,6 @@
 #include <driver/gpio.h>
 #include <driver/i2c_master.h>
 #include <driver/spi_master.h>
-#include <esp_lcd_panel_io.h>
-#include <esp_lcd_panel_ops.h>
 #include <esp_log.h>
 #include <lvgl.h>
 
@@ -13,8 +11,7 @@
 #include "codecs/box_audio_codec.h"
 #include "config.h"
 #include "cst836u_touch.h"
-#include "display/lcd_display.h"
-#include "st7305_panel.h"
+#include "custom_lcd_display.h"
 
 #define TAG "nano-rlcd"
 
@@ -44,7 +41,7 @@ class Esp32S3NanoRlcdBoard : public WifiBoard {
 private:
     i2c_master_bus_handle_t i2c_bus_ = nullptr;
     Button boot_button_;
-    LcdDisplay* display_ = nullptr;
+    CustomLcdDisplay* display_ = nullptr;
     bool touch_ready_ = false;
 
     void InitializeI2c()
@@ -66,45 +63,19 @@ private:
         ESP_LOGI(TAG, "i2c bus ready (sda=%d scl=%d)", AUDIO_CODEC_I2C_SDA_PIN, AUDIO_CODEC_I2C_SCL_PIN);
     }
 
-    void InitializeSpi()
-    {
-        spi_bus_config_t buscfg = {};
-        buscfg.mosi_io_num = DISPLAY_SPI_MOSI_PIN;
-        buscfg.miso_io_num = GPIO_NUM_NC;
-        buscfg.sclk_io_num = DISPLAY_SPI_SCK_PIN;
-        buscfg.quadwp_io_num = GPIO_NUM_NC;
-        buscfg.quadhd_io_num = GPIO_NUM_NC;
-        // 整帧 15000 字节一次发出，留足余量
-        buscfg.max_transfer_sz = 32 * 1024;
-        ESP_ERROR_CHECK(spi_bus_initialize(SPI2_HOST, &buscfg, SPI_DMA_CH_AUTO));
-    }
-
     void InitializeDisplay()
     {
-        esp_lcd_panel_io_handle_t panel_io = nullptr;
-        esp_lcd_panel_handle_t panel = nullptr;
-
-        esp_lcd_panel_io_spi_config_t io_config = {};
-        io_config.cs_gpio_num = DISPLAY_SPI_CS_PIN;
-        io_config.dc_gpio_num = DISPLAY_DC_PIN;
-        io_config.spi_mode = 0;
-        io_config.pclk_hz = 20 * 1000 * 1000;  // 实测定型值，30MHz 属超规格
-        io_config.trans_queue_depth = 10;
-        io_config.lcd_cmd_bits = 8;
-        io_config.lcd_param_bits = 8;
-        ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(SPI2_HOST, &io_config, &panel_io));
-
-        esp_lcd_panel_dev_config_t panel_config = {};
-        panel_config.reset_gpio_num = DISPLAY_RST_PIN;
-        panel_config.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB;
-        panel_config.bits_per_pixel = 16;  // LVGL 侧仍按 RGB565 渲染，驱动内部二值化
-        ESP_ERROR_CHECK(st7305_new_panel(panel_io, &panel_config, &panel));
-
-        ESP_ERROR_CHECK(esp_lcd_panel_reset(panel));
-        ESP_ERROR_CHECK(esp_lcd_panel_init(panel));
-
-        display_ = new SpiLcdDisplay(panel_io, panel, DISPLAY_WIDTH, DISPLAY_HEIGHT, 0, 0,
-                                     DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
+        // 参考 waveshare/esp32-s3-rlcd-4.2：panel_io 与 panel 传 NULL，
+        // 由 CustomLcdDisplay 自建 SPI 与 LVGL display，走 1bpp LUT 直写。
+        spi_display_config_t spi_config = {};
+        spi_config.mosi = DISPLAY_SPI_MOSI_PIN;
+        spi_config.scl = DISPLAY_SPI_SCK_PIN;
+        spi_config.dc = DISPLAY_DC_PIN;
+        spi_config.cs = DISPLAY_SPI_CS_PIN;
+        spi_config.rst = DISPLAY_RST_PIN;
+        display_ = new CustomLcdDisplay(NULL, NULL, DISPLAY_WIDTH, DISPLAY_HEIGHT, 0, 0,
+                                        DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY,
+                                        spi_config, SPI3_HOST);
     }
 
     void InitializeTouch()
@@ -138,7 +109,6 @@ public:
     Esp32S3NanoRlcdBoard() : boot_button_(BOOT_BUTTON_GPIO)
     {
         InitializeI2c();
-        InitializeSpi();
         InitializeDisplay();
         InitializeTouch();
         InitializeButtons();

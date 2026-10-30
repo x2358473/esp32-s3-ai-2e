@@ -70,9 +70,12 @@
    `BoxAudioCodec`（ES7210 四通道 TDM + ES8311 播放），与 ESP-BOX-3 同构。
 4. **共用 I2C**：触摸与两片 codec 都在 SDA 11 / SCL 12 上，只创建一次
    `i2c_master_bus`。板上已有 BSS138 电平转换与 10k/2.2k 上拉。
-5. **显示不是 TFT**：ST7305 显存是「每列 3 字节 = 2×4 像素块」的 1bpp 排布，
-   整帧固定 15000 字节。`st7305_panel.c` 把 LVGL 的 RGB565 区域二值化后按定型公式
-   写入帧缓存，并由后台任务限速整帧刷新（面板固有 16Hz，限到 ~10Hz）。
+5. **显示沿用微雪方案**：`custom_lcd_display.cc` 直接取自
+   `boards/waveshare/esp32-s3-rlcd-4.2`（同为 ST7305 400×300 RLCD，已实机验证）。
+   ST7305 显存是「每列 3 字节 = 2×4 像素块」的 1bpp 排布，整帧固定 15000 字节；
+   构造时 `panel_io`/`panel` 传 NULL，自行 `lv_display_create` + flush 回调，
+   用 400×300 的 index/bit 查找表把 RGB565 像素直写帧缓存，再整帧 SPI 刷出。
+   不实现 `esp_lcd_panel_t`，避免与 IDF 版本相关的私有结构耦合。
 6. **无背光**：不实现 `GetBacklight()`（基类默认返回 nullptr）。
 
 ## 构建
