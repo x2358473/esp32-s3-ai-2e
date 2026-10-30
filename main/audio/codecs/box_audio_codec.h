@@ -19,6 +19,7 @@ private:
 
     esp_codec_dev_handle_t output_dev_ = nullptr;
     esp_codec_dev_handle_t input_dev_ = nullptr;
+    bool init_ok_ = false;   // 初始化失败时保持 false，各接口直接跳过硬件操作
     std::mutex data_if_mutex_;
     int reference_gain_channel_ = -1;
     float reference_gain_ = 0.0f;
