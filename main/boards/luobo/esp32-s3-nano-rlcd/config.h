@@ -2,6 +2,7 @@
 #define _BOARD_CONFIG_H_
 
 #include <driver/gpio.h>
+#include <es8311_codec.h>  // ES8311_CODEC_DEFAULT_ADDR
 
 /*
  * ESP32-S3-Nano (N16R8) + ST7305 400x300 1bpp 反射屏 + CST836U 单点触摸
@@ -29,10 +30,11 @@
 #define AUDIO_CODEC_I2C_SDA_PIN  GPIO_NUM_11  // H1-4 ES_I2C_SDA，与触摸共用
 #define AUDIO_CODEC_I2C_SCL_PIN  GPIO_NUM_12  // H1-5 ES_I2C_SCL，与触摸共用
 
-#define AUDIO_CODEC_ES8311_ADDR  0x18  // ES8311_CODEC_DEFAULT_ADDR
-#define AUDIO_CODEC_ES7210_ADDR  0x41  // AD0 经 10k 上拉到 AU_3V3，非默认 0x40
+#define AUDIO_CODEC_ES8311_ADDR  ES8311_CODEC_DEFAULT_ADDR  // 0x30，8 位形式
+#define AUDIO_CODEC_ES7210_ADDR  0x82  // 7 位 0x41 << 1：AD0 经 10k 上拉到 AU_3V3，非默认 0x40
 
 // ES8311 的 OUTP/OUTN 经 R5/R7(0R) 硬件回接到 ES7210 的 MIC3 输入，构成 AEC 参考通道。
+// 必须为 true，否则设备端 AEC 不可用、实时打断失效。
 #define AUDIO_INPUT_REFERENCE    true
 
 // ---------------- 显示（ST7305 400x300 1bpp，无背光无灰阶） ----------------

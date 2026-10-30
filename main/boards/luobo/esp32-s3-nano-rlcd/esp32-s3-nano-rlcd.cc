@@ -68,17 +68,20 @@ private:
 
     // probe 只要地址 ACK 就算通过，但 codec 在 I2C 上应答不代表寄存器可读写
     // （缺 MCLK、内部状态机未就绪时就会这样），所以这里做一次真实的寄存器读。
-    bool ReadCodecReg(uint8_t addr, const char* name, bool quiet = false, uint32_t speed_hz = 100000)
+    // 默认 400kHz：本板在 100kHz 下实测 0/10，只有 400kHz 稳定，初判也统一走该速率。
+    bool ReadCodecReg(uint8_t addr, const char* name, bool quiet = false, uint32_t speed_hz = 400000)
     {
+        // addr 为 8 位形式（如 0x30/0x82），i2c_master 需要 7 位地址，与 esp_codec_dev 保持一致
+        uint8_t addr7 = addr >> 1;
         i2c_device_config_t dev_cfg = {
             .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-            .device_address = addr,
+            .device_address = addr7,
             .scl_speed_hz = speed_hz,
         };
         i2c_master_dev_handle_t dev = nullptr;
         if (i2c_master_bus_add_device(i2c_bus_, &dev_cfg, &dev) != ESP_OK) {
             if (!quiet) {
-                ESP_LOGE(TAG, "%s(0x%02X) add_device failed", name, addr);
+                ESP_LOGE(TAG, "%s(0x%02X) add_device failed", name, addr7);
             }
             return false;
         }
@@ -87,7 +90,7 @@ private:
         esp_err_t ret = i2c_master_transmit_receive(dev, &reg, 1, &val, 1, pdMS_TO_TICKS(100));
         i2c_master_bus_rm_device(dev);
         if (!quiet) {
-            ESP_LOGI(TAG, "%s(0x%02X) reg0 read: %s val=0x%02X", name, addr, esp_err_to_name(ret), val);
+            ESP_LOGD(TAG, "%s(0x%02X) reg0 read: %s val=0x%02X", name, addr7, esp_err_to_name(ret), val);
         }
         return ret == ESP_OK;
     }
@@ -99,7 +102,7 @@ private:
     {
         i2c_device_config_t dev_cfg = {
             .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-            .device_address = addr,
+            .device_address = (uint8_t)(addr >> 1),
             .scl_speed_hz = speed_hz,
         };
         i2c_master_dev_handle_t dev = nullptr;
@@ -179,80 +182,85 @@ public:
             return selected;
         }
 
-        // 上电初期 codec 尚未就绪，先重试几次
+        // 两颗 codec 在冷启动（I2S/MCLK 尚未运行）阶段的 I2C 速率偏好相反：
+        // ES8311 只在 400kHz 通（100kHz 实测 0/10），ES7210 只在 100kHz 通，
+        // 所以必须各按各的速率探测，不能共用一个默认值。
         bool es8311_ok = false;
         for (int i = 0; i < 5 && !es8311_ok; i++) {
-            es8311_ok = ReadCodecReg(AUDIO_CODEC_ES8311_ADDR, "ES8311");
+            es8311_ok = ReadCodecReg(AUDIO_CODEC_ES8311_ADDR, "ES8311", true, 400000);
             if (!es8311_ok) {
                 vTaskDelay(pdMS_TO_TICKS(100));
             }
         }
-        bool es7210_ok = ReadCodecReg(AUDIO_CODEC_ES7210_ADDR, "ES7210");
-
-        // 多速率诊断，用于区分两类硬件问题：
-        //   - 低速(10k/50k)能通、高速失败  → 信号完整性(电容/上升沿)，短接电平转换器可解
-        //   - 所有速率成功率一样低          → 物理断线/虚焊，需补焊
-        static const uint32_t kSpeeds[] = {10000, 50000, 100000, 400000};
-        int read_100k = 0;
-        int write_100k = 0;
-        int read_400k = 0;
-        int write_400k = 0;
-        for (uint32_t spd : kSpeeds) {
-            int rok = 0;
-            for (int i = 0; i < 10; i++) {
-                if (ReadCodecReg(AUDIO_CODEC_ES8311_ADDR, "ES8311", true, spd)) {
-                    rok++;
-                }
-            }
-            int wok = 0;
-            for (int i = 0; i < 5; i++) {
-                if (TestCodecWrite(AUDIO_CODEC_ES8311_ADDR, spd)) {
-                    wok++;
-                }
-            }
-            ESP_LOGI(TAG, "ES8311 @%luHz: read %d/10 write %d/5",
-                     (unsigned long)spd, rok, wok);
-            if (spd == 100000) {
-                read_100k = rok;
-                write_100k = wok;
-            } else if (spd == 400000) {
-                read_400k = rok;
-                write_400k = wok;
+        // ES7210 先 100kHz，失败后回退 400kHz（BoxAudioCodec 初始化时 MCLK 已开，本就是 400kHz）
+        bool es7210_ok = false;
+        for (int i = 0; i < 3 && !es7210_ok; i++) {
+            es7210_ok = ReadCodecReg(AUDIO_CODEC_ES7210_ADDR, "ES7210", true, 100000);
+            if (!es7210_ok) {
+                vTaskDelay(pdMS_TO_TICKS(100));
             }
         }
+        if (!es7210_ok) {
+            for (int i = 0; i < 3 && !es7210_ok; i++) {
+                es7210_ok = ReadCodecReg(AUDIO_CODEC_ES7210_ADDR, "ES7210", true, 400000);
+                if (!es7210_ok) {
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                }
+            }
+        }
+        if (!es7210_ok) {
+            ESP_LOGW(TAG, "ES7210 probe failed: 100kHz x3 and 400kHz x3 all NACK");
+        }
 
-        // 本板实测：100kHz 下读写全挂，400kHz 反而 100% 成功（BSS138 与低速时序冲突）。
-        // 因此判定按 400kHz 做，并把 codec 强制跑在 400kHz。
-        ESP_LOGI(TAG, "100kHz read=%d/10 write=%d/5 | 400kHz read=%d/10 write=%d/5",
-                 read_100k, write_100k, read_400k, write_400k);
+        // ES8311 实测：10k/50k/100k 下读写全挂，只有 400kHz 100% 成功（BSS138 与低速时序冲突），
+        // 因此只按 400kHz 读写各 3 次做判定，并把 codec 强制跑在 400kHz。
+        // 保留写测试是因为 esp_codec_dev 走的是 i2c_master_transmit（写路径），
+        // 读通不代表写通；TestCodecWrite 只把读到的原值写回，不改变任何配置。
+        int read_400k = 0;
+        int write_400k = 0;
+        for (int i = 0; i < 3; i++) {
+            if (ReadCodecReg(AUDIO_CODEC_ES8311_ADDR, "ES8311", true, 400000)) {
+                read_400k++;
+            }
+        }
+        for (int i = 0; i < 3; i++) {
+            if (TestCodecWrite(AUDIO_CODEC_ES8311_ADDR, 400000)) {
+                write_400k++;
+            }
+        }
+        ESP_LOGD(TAG, "400kHz read=%d/3 write=%d/3", read_400k, write_400k);
 
-        if (!es8311_ok || !es7210_ok || read_400k < 10 || write_400k < 5) {
+        if (!es8311_ok || !es7210_ok || read_400k < 3 || write_400k < 3) {
             ESP_LOGE(TAG, "audio codec unreliable (8311=%d 7210=%d), dummy", es8311_ok, es7210_ok);
             static DummyAudioCodec dummy_audio(AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE);
             selected = &dummy_audio;
             return selected;
         }
 
+        // 参数含义：输入增益 36dB、参考通道增益不作用（channel=-1, gain=0dB）、I2C 400kHz。
+        // 36dB 的由来：实测静默本底 -58dBFS、30cm 说话仅 -42dBFS，偏低；
+        // 而播报回声达 -32.9dBFS（比人声高 10dB），AEC 的 VERYAGGR 挡位会连带削掉近端人声。
+        // ES7210 PGA 上限约 37.5dB，故取 36dB。若仍偏弱，先降播放音量再考虑调 NLP 挡位。
         static BoxAudioCodec audio_codec(
             i2c_bus_, AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
             AUDIO_I2S_GPIO_MCLK, AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS,
             AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN,
             AUDIO_CODEC_PA_PIN, AUDIO_CODEC_ES8311_ADDR, AUDIO_CODEC_ES7210_ADDR,
-            AUDIO_INPUT_REFERENCE, 30.0f, -1, 0.0f, 400000);
+            AUDIO_INPUT_REFERENCE, 36.0f, -1, 0.0f, 400000);
         selected = &audio_codec;
 
         // 若 codec 初始化失败，此时 I2S 已在运行（MCLK/BCLK 正在翻转）。
-        // 再测一次 400kHz，用于区分"I2S 时钟串扰"与"驱动内部速率未生效"：
-        //   补测 10/10 → 不是串扰，问题在 esp_codec_dev 内部
-        //   补测 0/10  → 确认 I2S 干扰，需调整初始化顺序或走线
+        // 再测一次 400kHz，用于区分"I2S 时钟串扰"与"驱动内部问题"：
+        //   补测 3/3 → 不是串扰，问题在 esp_codec_dev 内部
+        //   补测 0/3 → 确认 I2S 干扰，需调整初始化顺序或走线
         if (!audio_codec.IsReady()) {
             int after_i2s = 0;
-            for (int i = 0; i < 10; i++) {
+            for (int i = 0; i < 3; i++) {
                 if (ReadCodecReg(AUDIO_CODEC_ES8311_ADDR, "ES8311", true, 400000)) {
                     after_i2s++;
                 }
             }
-            ESP_LOGW(TAG, "after i2s start, 400kHz read: %d/10", after_i2s);
+            ESP_LOGW(TAG, "after i2s start, 400kHz read: %d/3", after_i2s);
         }
         return selected;
     }

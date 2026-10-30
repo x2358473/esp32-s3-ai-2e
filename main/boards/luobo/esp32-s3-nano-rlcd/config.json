@@ -6,8 +6,7 @@
         {
             "name": "esp32-s3-nano-rlcd",
             "sdkconfig_append": [
-                "CONFIG_USE_DEVICE_AEC=y",
-                "CONFIG_CODEC_I2C_BACKWARD_COMPATIBLE=n"
+                "CONFIG_USE_DEVICE_AEC=y"
             ]
         }
     ]

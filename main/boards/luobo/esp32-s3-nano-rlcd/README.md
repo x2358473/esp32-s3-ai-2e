@@ -93,3 +93,18 @@ python scripts/build.py luobo/esp32-s3-nano-rlcd --name esp32-s3-nano-rlcd
 - `BoxAudioCodec` 内部把 `i2c_cfg.port` 写死为 `1`，但实际使用外部 `bus_handle`；
   若 codec 探测不到，先确认 esp_codec_dev 没有另起一条 legacy I2C。
 - NS4150B 由 VCC(5V) 供电，满功率峰值接近 1A，USB 供电能力不足时会掉压复位。
+
+## 设备端 AEC 与 I2C 地址约定
+
+- 实时打断依赖 `CONFIG_USE_DEVICE_AEC=y`，而该选项在 `main/Kconfig.projbuild` 里带板型白名单，
+  本板已登记 `BOARD_TYPE_LUOBO_ESP32_S3_NANO_RLCD`。若白名单丢失，构建会告警
+  `USE_DEVICE_AEC has user-set value y ... but is not visible`，随后静默退回 `kAecOff`，
+  表现就是"能对话但无法实时打断"，排查时先看 `sdkconfig` 里有没有 `CONFIG_USE_DEVICE_AEC=y`。
+- `AUDIO_CODEC_ES8311_ADDR` / `AUDIO_CODEC_ES7210_ADDR` 必须写 8 位形式
+  （`ES8311_CODEC_DEFAULT_ADDR` = 0x30，ES7210 = `0x82` = `0x41<<1`）：`esp_codec_dev`
+  内部会执行 `addr >> 1`，若写成 7 位地址，实际会访问不存在的从机，读写 100% 失败，
+  但日志打印的仍是移位前的原值，容易误判成硬件问题。
+- 两颗 codec 在冷启动（I2S/MCLK 未运行）阶段速率偏好相反：ES8311 只在 400kHz 通
+  （10k/50k/100k 实测读 0/10、写 0/5，BSS138 电平转换与低速时序冲突），ES7210 只在
+  100kHz 通。故探测阶段必须各用各的速率（ES7210 失败再回退 400kHz），
+  `BoxAudioCodec` 初始化时 MCLK 已运行，统一用 400kHz。

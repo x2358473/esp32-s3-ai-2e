@@ -8,6 +8,7 @@
 #include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <esp_timer.h>
+#include <esp_nsn_models.h>
 #include <esp_vadn_models.h>
 
 #include "audio_service.h"
@@ -140,6 +141,8 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
 
     char* vad_model_name =
         models_ == nullptr ? nullptr : esp_srmodel_filter(models_, ESP_VADN_PREFIX, nullptr);
+    char* ns_model_name =
+        models_ == nullptr ? nullptr : esp_srmodel_filter(models_, ESP_NSNET_PREFIX, nullptr);
     afe_config_t* afe_config =
         afe_config_init(input_format.c_str(), models_, AFE_TYPE_FD, AFE_MODE_LOW_COST);
     if (afe_config == nullptr) {
@@ -150,7 +153,20 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
     afe_config->aec_init = codec_->input_reference();
     afe_config->aec_mode = AEC_MODE_FD_LOW_COST;
     afe_config->aec_nlp_level = AEC_NLP_LEVEL_VERYAGGR;
+    // 降噪默认关闭；CONFIG_USE_AFE_NS 打开时同时要求 srmodels.bin 里打包了 nsnet 模型。
+    bool ns_enabled = false;
+#if CONFIG_USE_AFE_NS
+    if (ns_model_name != nullptr) {
+        afe_config->ns_init = true;
+        afe_config->ns_model_name = ns_model_name;
+        ns_enabled = true;
+    } else {
+        afe_config->ns_init = false;
+        ESP_LOGW(TAG, "USE_AFE_NS is enabled but no nsnet model was packed into srmodels");
+    }
+#else
     afe_config->ns_init = false;
+#endif
     afe_config->vad_init = kUseAfeForVoiceProcessing;
     afe_config->vad_mode = VAD_MODE_0;
     afe_config->vad_min_noise_ms = 100;
@@ -240,8 +256,9 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
     const char* detector = wake_detector_ == WakeDetector::kWakeNet
                                ? "WakeNet"
                                : (wake_detector_ == WakeDetector::kMultiNet ? "MultiNet" : "none");
-    ESP_LOGI(TAG, "Initialized FD AFE, detector: %s, NS: off, feed: %d, fetch: %d", detector,
-             afe_iface_->get_feed_chunksize(afe_data_), afe_iface_->get_fetch_chunksize(afe_data_));
+    ESP_LOGI(TAG, "Initialized FD AFE, detector: %s, NS: %s, feed: %d, fetch: %d", detector,
+             ns_enabled ? "on" : "off", afe_iface_->get_feed_chunksize(afe_data_),
+             afe_iface_->get_fetch_chunksize(afe_data_));
     ESP_LOGI(TAG, "After AFE create: free=%u min=%u largest=%u",
              heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
@@ -374,9 +391,12 @@ void AfeAudioEngine::UpdateAecState() {
 
 void AfeAudioEngine::ApplyAfeControls() {
     EventBits_t bits = xEventGroupGetBits(event_group_);
+    bool wakenet_on = false;
+    bool aec_on = false;
     if (wake_detector_ == WakeDetector::kWakeNet) {
         if (bits & kWakeWordEnabled) {
             afe_iface_->enable_wakenet(afe_data_);
+            wakenet_on = true;
         } else {
             afe_iface_->disable_wakenet(afe_data_);
         }
@@ -386,10 +406,16 @@ void AfeAudioEngine::ApplyAfeControls() {
                                 (device_aec_enabled_.load() && (bits & kVoiceProcessingEnabled));
         if (enable_aec) {
             afe_iface_->enable_aec(afe_data_);
+            aec_on = true;
         } else {
             afe_iface_->disable_aec(afe_data_);
         }
     }
+    // 临时诊断：确认待机时 WakeNet / AEC 的实际开关状态（定位"播报后无法唤醒"）
+    ESP_LOGI(TAG, "afe controls: wakenet=%s aec=%s (want_wake=%d want_voice=%d dev_aec=%d bits=0x%x)",
+             wakenet_on ? "on" : "off", aec_on ? "on" : "off",
+             (bits & kWakeWordEnabled) ? 1 : 0, (bits & kVoiceProcessingEnabled) ? 1 : 0,
+             device_aec_enabled_.load() ? 1 : 0, (unsigned)bits);
 }
 
 void AfeAudioEngine::ApplyPendingReset() {

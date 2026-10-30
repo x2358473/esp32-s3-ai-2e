@@ -211,8 +211,8 @@ def copy_wakenet_model(src, dst, idf_target=None):
 
 
 def process_sr_models(wakenet_model_dirs, multinet_model_dirs, build_dir, assets_dir,
-                      idf_target=None):
-    """Process SR models (wakenet and multinet) and generate srmodels.bin"""
+                      idf_target=None, nsnet_model_dirs=None):
+    """Process SR models (wakenet, multinet, optional nsnet) and generate srmodels.bin"""
     if not wakenet_model_dirs and not multinet_model_dirs:
         return None
     
@@ -245,6 +245,16 @@ def process_sr_models(wakenet_model_dirs, multinet_model_dirs, build_dir, assets
     if models_processed == 0:
         print("Warning: No SR models were successfully processed")
         return None
+
+    # Copy nsnet model if requested (AFE noise suppression)
+    if nsnet_model_dirs:
+        for nsnet_model_dir in nsnet_model_dirs:
+            nsnet_name = os.path.basename(nsnet_model_dir)
+            nsnet_dst = os.path.join(sr_models_build_dir, nsnet_name)
+            if copy_directory(nsnet_model_dir, nsnet_dst):
+                print(f"Added nsnet model: {nsnet_name}")
+            else:
+                print(f"Warning: Failed to copy nsnet model: {nsnet_model_dir}")
     
     # Use pack_models function to generate srmodels.bin
     srmodels_output = os.path.join(sr_models_build_dir, "srmodels.bin")
@@ -633,6 +643,17 @@ def read_wake_word_type_from_sdkconfig(sdkconfig_path):
     return config_values
 
 
+def read_afe_ns_enabled(sdkconfig_path):
+    """Return True when CONFIG_USE_AFE_NS=y (pack NSNet model + enable AFE NS)."""
+    if not sdkconfig_path or not os.path.exists(sdkconfig_path):
+        return False
+    with io.open(sdkconfig_path, "r", encoding="utf-8") as f:
+        for line in f:
+            if line.strip().startswith("CONFIG_USE_AFE_NS=y"):
+                return True
+    return False
+
+
 def read_custom_wake_word_from_sdkconfig(sdkconfig_path):
     """
     Read custom wake word configuration from sdkconfig
@@ -708,6 +729,20 @@ def get_language_from_multinet_models(multinet_models):
         return 'en'
     else:
         return 'cn'  # Default to Chinese
+
+
+def get_nsnet_model_paths(esp_sr_model_path):
+    """Return the nsnet model directory (prefers nsnet2, falls back to nsnet1)."""
+    if not esp_sr_model_path:
+        return []
+
+    for name in ("nsnet2", "nsnet1"):
+        nsnet_model_path = os.path.join(esp_sr_model_path, "nsnet_model", name)
+        if os.path.exists(nsnet_model_path):
+            return [nsnet_model_path]
+
+    print(f"Warning: no nsnet model found under {os.path.join(esp_sr_model_path, 'nsnet_model')}")
+    return []
 
 
 def get_wakenet_model_paths(model_names, esp_sr_model_path):
@@ -810,7 +845,7 @@ def get_emoji_collection_path(default_emoji_collection, noto_fonts_path, project
 def build_assets_integrated(wakenet_model_paths, multinet_model_paths, text_font_path,
                             emoji_collection_path, extra_files_path, output_path,
                             multinet_model_info=None, font_bundle_id=None, max_size=None,
-                            idf_target=None):
+                            idf_target=None, nsnet_model_paths=None):
     """
     Build assets using integrated functions (no external dependencies)
     """
@@ -830,7 +865,7 @@ def build_assets_integrated(wakenet_model_paths, multinet_model_paths, text_font
         # Process each component
         srmodels = process_sr_models(
             wakenet_model_paths, multinet_model_paths, temp_build_dir, assets_dir,
-            idf_target=idf_target,
+            idf_target=idf_target, nsnet_model_dirs=nsnet_model_paths,
         ) if (wakenet_model_paths or multinet_model_paths) else None
         text_font = process_text_font(text_font_path, assets_dir) if text_font_path else None
         emoji_collection = process_emoji_collection(emoji_collection_path, assets_dir) if emoji_collection_path else None
@@ -947,6 +982,13 @@ def main():
     elif multinet_model_names:
         print(f"  Note: Found multinet models {multinet_model_names} but USE_CUSTOM_WAKE_WORD is disabled, skipping")
     
+    # 4. Package nsnet model only when AFE noise suppression is enabled
+    nsnet_model_paths = []
+    if read_afe_ns_enabled(args.sdkconfig):
+        nsnet_model_paths = get_nsnet_model_paths(args.esp_sr_model_path)
+        if nsnet_model_paths:
+            print(f"  nsnet model: {os.path.basename(nsnet_model_paths[0])} (will be packaged)")
+
     # Print model information (only for models that will actually be packaged)
     if wakenet_model_paths:
         print(f"  wakenet models: {', '.join(wakenet_model_names)} (will be packaged)")
@@ -1011,7 +1053,7 @@ def main():
     success = build_assets_integrated(
         wakenet_model_paths, multinet_model_paths, text_font_path, emoji_collection_path,
         extra_files_path, args.output, multinet_model_info, font_bundle_id, args.max_size,
-        idf_target=idf_target)
+        idf_target=idf_target, nsnet_model_paths=nsnet_model_paths)
     
     if not success:
         sys.exit(1)

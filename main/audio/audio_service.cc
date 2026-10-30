@@ -1,5 +1,8 @@
 #include "audio_service.h"
 #include <esp_log.h>
+#include <esp_timer.h>
+#include <cmath>
+#include <cstdio>
 #include <cstring>
 
 #define RATE_CVT_CFG(_src_rate, _dest_rate, _channel)                                        \
@@ -223,6 +226,41 @@ bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, in
             return false;
         }
     }
+
+    // ==== 临时诊断：输入电平，用于定位唤醒距离问题；问题定位后整段删除 ====
+    {
+        static uint64_t acc_sq[2] = {0, 0};
+        static uint32_t acc_n = 0;
+        static int64_t last_log_us = 0;
+        const int ch = codec_->input_channels();
+        const int frames = ch > 0 ? static_cast<int>(data.size() / ch) : 0;
+        for (int c = 0; c < ch && c < 2; c++) {
+            for (int i = 0; i < frames; i++) {
+                int32_t s = data[i * ch + c];
+                acc_sq[c] += static_cast<uint64_t>(static_cast<int64_t>(s) * s);
+            }
+        }
+        acc_n += static_cast<uint32_t>(frames);
+        int64_t now_us = esp_timer_get_time();
+        if (last_log_us == 0) {
+            last_log_us = now_us;
+        }
+        if (now_us - last_log_us >= 1000000 && acc_n > 0) {
+            char buf[112] = {0};
+            int off = 0;
+            for (int c = 0; c < ch && c < 2; c++) {
+                float rms = sqrtf(static_cast<float>(acc_sq[c]) / static_cast<float>(acc_n));
+                off += snprintf(buf + off, sizeof(buf) - off, " ch%d=%.0f(%.1fdBFS)", c, rms,
+                                20.0f * log10f(rms / 32768.0f + 1e-9f));
+            }
+            ESP_LOGI("MicLevel", "%s", buf);
+            acc_sq[0] = 0;
+            acc_sq[1] = 0;
+            acc_n = 0;
+            last_log_us = now_us;
+        }
+    }
+    // ==== 临时诊断结束 ====
 
     /* Update the last input time */
     last_input_time_ = std::chrono::steady_clock::now();
