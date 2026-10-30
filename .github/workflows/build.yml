@@ -124,6 +124,8 @@ jobs:
           done
           echo "===== audio_codec_new_i2c_ctrl ====="
           grep -rn -A25 "audio_codec_new_i2c_ctrl(audio_codec_i2c_cfg_t" --include=*.c . 2>/dev/null | head -70 || true
+          echo "===== CONFIG_CODEC_I2C_BACKWARD_COMPATIBLE ====="
+          grep -rn "CODEC_I2C_BACKWARD_COMPATIBLE" build/config/sdkconfig.h 2>/dev/null || echo "NOT SET in sdkconfig.h (=> 使用新驱动 i2c_master)"
           echo "===== DEFAULT_I2C_CLOCK ====="
           grep -rn "DEFAULT_I2C_CLOCK" --include=*.c --include=*.h . 2>/dev/null | head -20 || true
           echo "===== audio_codec_i2c_cfg_t ====="
