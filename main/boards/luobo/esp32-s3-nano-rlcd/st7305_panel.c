@@ -28,7 +28,7 @@
 #define REFRESH_PERIOD_MS 80
 
 typedef struct {
-    esp_lcd_panel_t base;
+    struct esp_lcd_panel_t base;
     esp_lcd_panel_io_handle_t io;
     gpio_num_t rst_gpio;
     uint8_t *fb;        // LVGL 侧写入的帧缓存
@@ -49,7 +49,7 @@ static esp_err_t panel_tx_cmd(st7305_panel_t *p, uint8_t cmd)
     return esp_lcd_panel_io_tx_param(p->io, cmd, NULL, 0);
 }
 
-static esp_err_t st7305_reset(esp_lcd_panel_t *panel)
+static esp_err_t st7305_reset(struct esp_lcd_panel_t *panel)
 {
     st7305_panel_t *p = (st7305_panel_t *)panel;
     if (p->rst_gpio != GPIO_NUM_NC) {
@@ -61,7 +61,7 @@ static esp_err_t st7305_reset(esp_lcd_panel_t *panel)
     return ESP_OK;
 }
 
-static esp_err_t st7305_init(esp_lcd_panel_t *panel)
+static esp_err_t st7305_init(struct esp_lcd_panel_t *panel)
 {
     st7305_panel_t *p = (st7305_panel_t *)panel;
 
@@ -156,7 +156,7 @@ static void st7305_refresh_task(void *arg)
     }
 }
 
-static esp_err_t st7305_draw_bitmap(esp_lcd_panel_t *panel, int x_start, int y_start, int x_end, int y_end,
+static esp_err_t st7305_draw_bitmap(struct esp_lcd_panel_t *panel, int x_start, int y_start, int x_end, int y_end,
                                     const void *color_data)
 {
     st7305_panel_t *p = (st7305_panel_t *)panel;
@@ -202,7 +202,7 @@ static esp_err_t st7305_draw_bitmap(esp_lcd_panel_t *panel, int x_start, int y_s
     return ESP_OK;
 }
 
-static esp_err_t st7305_mirror(esp_lcd_panel_t *panel, bool mirror_x, bool mirror_y)
+static esp_err_t st7305_mirror(struct esp_lcd_panel_t *panel, bool mirror_x, bool mirror_y)
 {
     // 方向由 MADCTL 0x48 定型，运行期不允许改
     (void)panel;
@@ -211,14 +211,14 @@ static esp_err_t st7305_mirror(esp_lcd_panel_t *panel, bool mirror_x, bool mirro
     return ESP_ERR_NOT_SUPPORTED;
 }
 
-static esp_err_t st7305_swap_xy(esp_lcd_panel_t *panel, bool swap_axes)
+static esp_err_t st7305_swap_xy(struct esp_lcd_panel_t *panel, bool swap_axes)
 {
     (void)panel;
     (void)swap_axes;
     return ESP_ERR_NOT_SUPPORTED;
 }
 
-static esp_err_t st7305_set_gap(esp_lcd_panel_t *panel, int x_gap, int y_gap)
+static esp_err_t st7305_set_gap(struct esp_lcd_panel_t *panel, int x_gap, int y_gap)
 {
     (void)panel;
     (void)x_gap;
@@ -226,27 +226,27 @@ static esp_err_t st7305_set_gap(esp_lcd_panel_t *panel, int x_gap, int y_gap)
     return ESP_OK;
 }
 
-static esp_err_t st7305_invert_color(esp_lcd_panel_t *panel, bool invert_color_data)
+static esp_err_t st7305_invert_color(struct esp_lcd_panel_t *panel, bool invert_color_data)
 {
     (void)panel;
     (void)invert_color_data;
     return ESP_OK;
 }
 
-static esp_err_t st7305_disp_on_off(esp_lcd_panel_t *panel, bool on_off)
+static esp_err_t st7305_disp_on_off(struct esp_lcd_panel_t *panel, bool on_off)
 {
     st7305_panel_t *p = (st7305_panel_t *)panel;
     return panel_tx_cmd(p, on_off ? 0x29 : 0x28);
 }
 
-static esp_err_t st7305_disp_sleep(esp_lcd_panel_t *panel, bool sleep)
+static esp_err_t st7305_disp_sleep(struct esp_lcd_panel_t *panel, bool sleep)
 {
     st7305_panel_t *p = (st7305_panel_t *)panel;
     p->sleep_in = sleep;
     return panel_tx_cmd(p, sleep ? 0x10 : 0x11);
 }
 
-static esp_err_t st7305_del(esp_lcd_panel_t *panel)
+static esp_err_t st7305_del(struct esp_lcd_panel_t *panel)
 {
     st7305_panel_t *p = (st7305_panel_t *)panel;
     if (p->refresh_task) {
