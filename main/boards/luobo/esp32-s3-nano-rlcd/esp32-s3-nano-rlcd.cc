@@ -9,6 +9,7 @@
 #include "application.h"
 #include "button.h"
 #include "codecs/box_audio_codec.h"
+#include "codecs/dummy_audio_codec.h"
 #include "config.h"
 #include "cst836u_touch.h"
 #include "custom_lcd_display.h"
@@ -61,6 +62,13 @@ private:
         };
         ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_cfg, &i2c_bus_));
         ESP_LOGI(TAG, "i2c bus ready (sda=%d scl=%d)", AUDIO_CODEC_I2C_SDA_PIN, AUDIO_CODEC_I2C_SCL_PIN);
+
+        // 诊断：确认触摸(0x15)与两片 codec(0x18/0x41)是否都挂在这条总线上
+        for (uint8_t addr = 0x08; addr < 0x78; addr++) {
+            if (i2c_master_probe(i2c_bus_, addr, pdMS_TO_TICKS(50)) == ESP_OK) {
+                ESP_LOGI(TAG, "i2c device found: 0x%02X", addr);
+            }
+        }
     }
 
     void InitializeDisplay()
@@ -117,6 +125,15 @@ public:
 
     virtual AudioCodec* GetAudioCodec() override
     {
+        // 音频板 I2C 不通时降级为 dummy：BoxAudioCodec 内部是 assert，
+        // 直接构造会 init 失败即重启，连日志都留不下。
+        if (i2c_master_probe(i2c_bus_, AUDIO_CODEC_ES8311_ADDR, pdMS_TO_TICKS(100)) != ESP_OK) {
+            ESP_LOGE(TAG, "ES8311(0x%02X) not found on i2c bus, fall back to dummy audio",
+                     AUDIO_CODEC_ES8311_ADDR);
+            static DummyAudioCodec dummy_audio(AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE);
+            return &dummy_audio;
+        }
+
         static BoxAudioCodec audio_codec(
             i2c_bus_, AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
             AUDIO_I2S_GPIO_MCLK, AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS,
