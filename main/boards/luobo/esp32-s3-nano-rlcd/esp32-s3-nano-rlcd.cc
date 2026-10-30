@@ -92,6 +92,31 @@ private:
         return ret == ESP_OK;
     }
 
+    // esp_codec_dev 内部用的是 i2c_master_transmit（只写，不带读），
+    // 与上面的 transmit_receive 是两条不同的驱动路径，必须单独验证。
+    // 这里读出原值再原值写回，不改变 codec 任何配置。
+    bool TestCodecWrite(uint8_t addr, uint32_t speed_hz)
+    {
+        i2c_device_config_t dev_cfg = {
+            .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+            .device_address = addr,
+            .scl_speed_hz = speed_hz,
+        };
+        i2c_master_dev_handle_t dev = nullptr;
+        if (i2c_master_bus_add_device(i2c_bus_, &dev_cfg, &dev) != ESP_OK) {
+            return false;
+        }
+        uint8_t reg = 0x00;
+        uint8_t val = 0;
+        bool ok = false;
+        if (i2c_master_transmit_receive(dev, &reg, 1, &val, 1, pdMS_TO_TICKS(100)) == ESP_OK) {
+            uint8_t buf[2] = {reg, val};
+            ok = (i2c_master_transmit(dev, buf, 2, pdMS_TO_TICKS(100)) == ESP_OK);
+        }
+        i2c_master_bus_rm_device(dev);
+        return ok;
+    }
+
     void InitializeDisplay()
     {
         // 参考 waveshare/esp32-s3-rlcd-4.2：panel_io 与 panel 传 NULL，
@@ -168,23 +193,34 @@ public:
         //   - 低速(10k/50k)能通、高速失败  → 信号完整性(电容/上升沿)，短接电平转换器可解
         //   - 所有速率成功率一样低          → 物理断线/虚焊，需补焊
         static const uint32_t kSpeeds[] = {10000, 50000, 100000, 400000};
-        int success_100k = 0;
+        int read_100k = 0;
+        int write_100k = 0;
         for (uint32_t spd : kSpeeds) {
-            int ok = 0;
+            int rok = 0;
             for (int i = 0; i < 10; i++) {
                 if (ReadCodecReg(AUDIO_CODEC_ES8311_ADDR, "ES8311", true, spd)) {
-                    ok++;
+                    rok++;
                 }
             }
-            ESP_LOGI(TAG, "ES8311 @%luHz: %d/10", (unsigned long)spd, ok);
+            int wok = 0;
+            for (int i = 0; i < 5; i++) {
+                if (TestCodecWrite(AUDIO_CODEC_ES8311_ADDR, spd)) {
+                    wok++;
+                }
+            }
+            ESP_LOGI(TAG, "ES8311 @%luHz: read %d/10 write %d/5",
+                     (unsigned long)spd, rok, wok);
             if (spd == 100000) {
-                success_100k = ok;
+                read_100k = rok;
+                write_100k = wok;
             }
         }
 
-        if (!es8311_ok || !es7210_ok || success_100k < 10) {
-            ESP_LOGE(TAG, "audio codec unreliable (es8311=%d es7210=%d 100kHz=%d/10), fall back to dummy",
-                     es8311_ok, es7210_ok, success_100k);
+        // 判定必须用 100kHz 且写也要通：esp_codec_dev 用的是它自己的速率，
+        // 若这里是 0 但 400k 正常，说明两者速率不一致，直接上真 codec 只会 assert。
+        if (!es8311_ok || !es7210_ok || read_100k < 10 || write_100k < 5) {
+            ESP_LOGE(TAG, "audio codec unreliable (es8311=%d es7210=%d 100k read=%d/10 write=%d/5), dummy",
+                     es8311_ok, es7210_ok, read_100k, write_100k);
             static DummyAudioCodec dummy_audio(AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE);
             selected = &dummy_audio;
             return selected;
