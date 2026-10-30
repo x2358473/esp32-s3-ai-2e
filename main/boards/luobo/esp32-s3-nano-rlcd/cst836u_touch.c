@@ -52,7 +52,7 @@ bool cst836u_touch_init(i2c_master_bus_handle_t bus)
     i2c_device_config_t dev_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         .device_address = TOUCH_I2C_ADDR,
-        .scl_speed_hz = 400000,
+        .scl_speed_hz = 100000,
     };
     ret = i2c_master_bus_add_device(bus, &dev_cfg, &s_tp_dev);
     if (ret != ESP_OK) {
