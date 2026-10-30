@@ -1,0 +1,13 @@
+{
+    "manufacturer": "luobo",
+    "type": "esp32-s3-nano-rlcd",
+    "target": "esp32s3",
+    "builds": [
+        {
+            "name": "esp32-s3-nano-rlcd",
+            "sdkconfig_append": [
+                "CONFIG_USE_DEVICE_AEC=y"
+            ]
+        }
+    ]
+}

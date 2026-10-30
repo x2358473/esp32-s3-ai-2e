@@ -332,6 +332,9 @@ choice BOARD_TYPE
     config BOARD_TYPE_LILYGO_T_DISPLAY_S3_PRO_MVSRLORA_NO_BATTERY
         bool "LILYGO T-Display-S3-Pro MVSR LoRa (No Battery)"
         depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_LUOBO_ESP32_S3_NANO_RLCD
+        bool "Luobo ESP32-S3-Nano RLCD (ST7305 + ES7210/ES8311 AEC)"
+        depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_M5STACK_ATOM_ECHOS3R
         bool "M5Stack AtomEchoS3R"
         depends on IDF_TARGET_ESP32S3
