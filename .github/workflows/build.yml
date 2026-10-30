@@ -1,22 +1,18 @@
 name: Build Boards
 
 on:
-  # 手动触发：默认只编译 gezipai；填 all 编译全部变体
+  # 全部改为手动触发：不再随 push / pull_request 自动构建
   workflow_dispatch:
     inputs:
       board:
-        description: 'Board to build (default: gezipai, use "all" for full matrix)'
-        required: false
+        description: 'Board to build'
+        type: choice
+        required: true
         default: 'gezipai'
-  push:
-    branches:
-      - main
-      - ci/*       # for ci test
-      - baseline/* # for 2.5.2 upgrade validation
-      - v252-*     # for 2.5.2 upgrade (squashed baseline)
-  pull_request:
-    branches:
-      - main
+        options:
+          - gezipai
+          - luobo/esp32-s3-nano-rlcd
+          - all
 
 permissions:
   contents: read
@@ -172,23 +168,23 @@ jobs:
           files: dist/*.bin
           overwrite_files: true
           body: |
-            自动构建产物（xiaozhi 2.5.2 基线 / gezipai）
+            自动构建产物（xiaozhi 2.5.2 基线 / ${{ inputs.board }}）
 
             - Commit: `${{ github.sha }}`
             - Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-            包含三个文件：
+            包含三个文件（`<board>` 为板卡名，斜杠替换为横线）：
 
-            - `xiaozhi_gezipai_<sha>_full.bin` —— **完整镜像**（0x0 起，已含 assets 分区），ESP Web Tools / 网页刷机用这个
-            - `xiaozhi_gezipai_<sha>.bin` —— 仅 app（bootloader + 分区表 + 应用）
-            - `xiaozhi_gezipai_<sha>_assets.bin` —— assets 分区（0x800000），与 app 配套
+            - `xiaozhi_<board>_<sha>_full.bin` —— **完整镜像**（0x0 起，已含 assets 分区），ESP Web Tools / 网页刷机用这个
+            - `xiaozhi_<board>_<sha>.bin` —— 仅 app（bootloader + 分区表 + 应用）
+            - `xiaozhi_<board>_<sha>_assets.bin` —— assets 分区（0x800000），与 app 配套
 
             命令行烧录（app + assets 分开写）：
 
             ```
             esptool.py --chip esp32s3 -p <COM> -b 460800 write_flash \
-              0x0       xiaozhi_gezipai_<sha>.bin \
-              0x800000  xiaozhi_gezipai_<sha>_assets.bin
+              0x0       xiaozhi_<board>_<sha>.bin \
+              0x800000  xiaozhi_<board>_<sha>_assets.bin
             ```
 
             Web 工具烧录：直接选 `_full.bin`（大小约 8.6MB，写入会慢一些）。
