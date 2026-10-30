@@ -3,14 +3,42 @@
 #include <esp_log.h>
 #include <driver/i2c_master.h>
 #include <driver/i2s_tdm.h>
+#include <type_traits>
 
 #define TAG "BoxAudioCodec"
+
+// esp_codec_dev 不同版本里 I2C 时钟字段的命名和存在性不一致（有的叫 clock_speed，
+// 有的叫 scl_speed_hz，也可能完全没有），用 SFINAE 探测后按需设置，
+// 保证任何版本下都能编译通过。
+template <typename T, typename = void>
+struct has_clock_speed : std::false_type {};
+template <typename T>
+struct has_clock_speed<T, std::void_t<decltype(std::declval<T>().clock_speed)>> : std::true_type {};
+
+template <typename T, typename = void>
+struct has_scl_speed_hz : std::false_type {};
+template <typename T>
+struct has_scl_speed_hz<T, std::void_t<decltype(std::declval<T>().scl_speed_hz)>> : std::true_type {};
+
+template <typename CfgT>
+static void ApplyI2cClockSpeed(CfgT& cfg, uint32_t speed_hz) {
+    if constexpr (has_clock_speed<CfgT>::value) {
+        cfg.clock_speed = speed_hz;
+        ESP_LOGI(TAG, "i2c clock_speed = %lu Hz", (unsigned long)speed_hz);
+    } else if constexpr (has_scl_speed_hz<CfgT>::value) {
+        cfg.scl_speed_hz = speed_hz;
+        ESP_LOGI(TAG, "i2c scl_speed_hz = %lu Hz", (unsigned long)speed_hz);
+    } else {
+        ESP_LOGW(TAG, "audio_codec_i2c_cfg_t has no clock field, i2c speed stays default");
+    }
+}
 
 BoxAudioCodec::BoxAudioCodec(void* i2c_master_handle, int input_sample_rate, int output_sample_rate,
                              gpio_num_t mclk, gpio_num_t bclk, gpio_num_t ws, gpio_num_t dout,
                              gpio_num_t din, gpio_num_t pa_pin, uint8_t es8311_addr,
                              uint8_t es7210_addr, bool input_reference, float input_gain,
-                             int reference_gain_channel, float reference_gain) {
+                             int reference_gain_channel, float reference_gain,
+                             uint32_t i2c_clock_speed) {
     duplex_ = true;                              // 是否双工
     input_reference_ = input_reference;          // 是否使用参考输入，实现回声消除
     input_channels_ = input_reference_ ? 2 : 1;  // 输入通道数
@@ -37,6 +65,9 @@ BoxAudioCodec::BoxAudioCodec(void* i2c_master_handle, int input_sample_rate, int
         .addr = es8311_addr,
         .bus_handle = i2c_master_handle,
     };
+    if (i2c_clock_speed != 0) {
+        ApplyI2cClockSpeed(i2c_cfg, i2c_clock_speed);
+    }
     out_ctrl_if_ = audio_codec_new_i2c_ctrl(&i2c_cfg);
     assert(out_ctrl_if_ != NULL);
 

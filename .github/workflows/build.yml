@@ -109,6 +109,25 @@ jobs:
           fi
           python scripts/build.py "$BOARD" --name "$VARIANT" "${OPTIONS[@]}"
 
+      # 诊断用：把 esp_codec_dev 的 I2C 适配层与配置结构体打印到日志，
+      # 便于确认各版本里时钟字段的真实名字（clock_speed / scl_speed_hz / 不存在）。
+      - name: Dump esp_codec_dev i2c config
+        if: always()
+        shell: bash
+        run: |
+          echo "===== audio_codec_ctrl_i2c.c ====="
+          find . -name "audio_codec_ctrl_i2c.c" -not -path "./build/*" 2>/dev/null | while read -r f; do
+            echo "--- $f"
+            grep -n "scl_speed_hz\|clock_speed\|i2c_device_config_t" "$f" || true
+          done
+          echo "===== audio_codec_i2c_cfg_t ====="
+          find . -name "*.h" -not -path "./build/*" 2>/dev/null | while read -r h; do
+            if grep -q "audio_codec_i2c_cfg_t;" "$h" 2>/dev/null; then
+              echo "--- $h"
+              grep -n -B8 "audio_codec_i2c_cfg_t;" "$h" || true
+            fi
+          done
+
       - name: Rename firmware
         shell: bash
         run: |

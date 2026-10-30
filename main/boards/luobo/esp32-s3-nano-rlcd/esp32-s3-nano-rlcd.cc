@@ -195,6 +195,8 @@ public:
         static const uint32_t kSpeeds[] = {10000, 50000, 100000, 400000};
         int read_100k = 0;
         int write_100k = 0;
+        int read_400k = 0;
+        int write_400k = 0;
         for (uint32_t spd : kSpeeds) {
             int rok = 0;
             for (int i = 0; i < 10; i++) {
@@ -213,14 +215,19 @@ public:
             if (spd == 100000) {
                 read_100k = rok;
                 write_100k = wok;
+            } else if (spd == 400000) {
+                read_400k = rok;
+                write_400k = wok;
             }
         }
 
-        // 判定必须用 100kHz 且写也要通：esp_codec_dev 用的是它自己的速率，
-        // 若这里是 0 但 400k 正常，说明两者速率不一致，直接上真 codec 只会 assert。
-        if (!es8311_ok || !es7210_ok || read_100k < 10 || write_100k < 5) {
-            ESP_LOGE(TAG, "audio codec unreliable (es8311=%d es7210=%d 100k read=%d/10 write=%d/5), dummy",
-                     es8311_ok, es7210_ok, read_100k, write_100k);
+        // 本板实测：100kHz 下读写全挂，400kHz 反而 100% 成功（BSS138 与低速时序冲突）。
+        // 因此判定按 400kHz 做，并把 codec 强制跑在 400kHz。
+        ESP_LOGI(TAG, "100kHz read=%d/10 write=%d/5 | 400kHz read=%d/10 write=%d/5",
+                 read_100k, write_100k, read_400k, write_400k);
+
+        if (!es8311_ok || !es7210_ok || read_400k < 10 || write_400k < 5) {
+            ESP_LOGE(TAG, "audio codec unreliable (8311=%d 7210=%d), dummy", es8311_ok, es7210_ok);
             static DummyAudioCodec dummy_audio(AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE);
             selected = &dummy_audio;
             return selected;
@@ -231,7 +238,7 @@ public:
             AUDIO_I2S_GPIO_MCLK, AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS,
             AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN,
             AUDIO_CODEC_PA_PIN, AUDIO_CODEC_ES8311_ADDR, AUDIO_CODEC_ES7210_ADDR,
-            AUDIO_INPUT_REFERENCE);
+            AUDIO_INPUT_REFERENCE, 30.0f, -1, 0.0f, 400000);
         selected = &audio_codec;
         return selected;
     }
