@@ -11,6 +11,11 @@
 // 有的叫 scl_speed_hz，也可能完全没有），用 SFINAE 探测后按需设置，
 // 保证任何版本下都能编译通过。
 template <typename T, typename = void>
+struct has_clock_speed_hz : std::false_type {};
+template <typename T>
+struct has_clock_speed_hz<T, std::void_t<decltype(std::declval<T>().clock_speed_hz)>> : std::true_type {};
+
+template <typename T, typename = void>
 struct has_clock_speed : std::false_type {};
 template <typename T>
 struct has_clock_speed<T, std::void_t<decltype(std::declval<T>().clock_speed)>> : std::true_type {};
@@ -22,7 +27,10 @@ struct has_scl_speed_hz<T, std::void_t<decltype(std::declval<T>().scl_speed_hz)>
 
 template <typename CfgT>
 static void ApplyI2cClockSpeed(CfgT& cfg, uint32_t speed_hz) {
-    if constexpr (has_clock_speed<CfgT>::value) {
+    if constexpr (has_clock_speed_hz<CfgT>::value) {
+        cfg.clock_speed_hz = static_cast<int>(speed_hz);
+        ESP_LOGI(TAG, "i2c clock_speed_hz = %lu Hz", (unsigned long)speed_hz);
+    } else if constexpr (has_clock_speed<CfgT>::value) {
         cfg.clock_speed = speed_hz;
         ESP_LOGI(TAG, "i2c clock_speed = %lu Hz", (unsigned long)speed_hz);
     } else if constexpr (has_scl_speed_hz<CfgT>::value) {
