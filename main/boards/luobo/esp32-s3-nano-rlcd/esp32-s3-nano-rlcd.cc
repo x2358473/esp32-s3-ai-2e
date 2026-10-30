@@ -62,13 +62,28 @@ private:
         };
         ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_cfg, &i2c_bus_));
         ESP_LOGI(TAG, "i2c bus ready (sda=%d scl=%d)", AUDIO_CODEC_I2C_SDA_PIN, AUDIO_CODEC_I2C_SCL_PIN);
+    }
 
-        // 诊断：确认触摸(0x15)与两片 codec(0x18/0x41)是否都挂在这条总线上
-        for (uint8_t addr = 0x08; addr < 0x78; addr++) {
-            if (i2c_master_probe(i2c_bus_, addr, pdMS_TO_TICKS(50)) == ESP_OK) {
-                ESP_LOGI(TAG, "i2c device found: 0x%02X", addr);
-            }
+    // probe 只要地址 ACK 就算通过，但 codec 在 I2C 上应答不代表寄存器可读写
+    // （缺 MCLK、内部状态机未就绪时就会这样），所以这里做一次真实的寄存器读。
+    bool ReadCodecReg(uint8_t addr, const char* name)
+    {
+        i2c_device_config_t dev_cfg = {
+            .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+            .device_address = addr,
+            .scl_speed_hz = 100000,
+        };
+        i2c_master_dev_handle_t dev = nullptr;
+        if (i2c_master_bus_add_device(i2c_bus_, &dev_cfg, &dev) != ESP_OK) {
+            ESP_LOGE(TAG, "%s(0x%02X) add_device failed", name, addr);
+            return false;
         }
+        uint8_t reg = 0x00;
+        uint8_t val = 0;
+        esp_err_t ret = i2c_master_transmit_receive(dev, &reg, 1, &val, 1, pdMS_TO_TICKS(100));
+        i2c_master_bus_rm_device(dev);
+        ESP_LOGI(TAG, "%s(0x%02X) reg0 read: %s val=0x%02X", name, addr, esp_err_to_name(ret), val);
+        return ret == ESP_OK;
     }
 
     void InitializeDisplay()
@@ -127,9 +142,11 @@ public:
     {
         // 音频板 I2C 不通时降级为 dummy：BoxAudioCodec 内部是 assert，
         // 直接构造会 init 失败即重启，连日志都留不下。
-        if (i2c_master_probe(i2c_bus_, AUDIO_CODEC_ES8311_ADDR, pdMS_TO_TICKS(100)) != ESP_OK) {
-            ESP_LOGE(TAG, "ES8311(0x%02X) not found on i2c bus, fall back to dummy audio",
-                     AUDIO_CODEC_ES8311_ADDR);
+        bool es8311_ok = ReadCodecReg(AUDIO_CODEC_ES8311_ADDR, "ES8311");
+        bool es7210_ok = ReadCodecReg(AUDIO_CODEC_ES7210_ADDR, "ES7210");
+        if (!es8311_ok || !es7210_ok) {
+            ESP_LOGE(TAG, "audio codec unreachable (es8311=%d es7210=%d), fall back to dummy audio",
+                     es8311_ok, es7210_ok);
             static DummyAudioCodec dummy_audio(AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE);
             return &dummy_audio;
         }
