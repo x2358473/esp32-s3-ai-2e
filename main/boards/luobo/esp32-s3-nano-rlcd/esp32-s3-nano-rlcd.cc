@@ -68,12 +68,12 @@ private:
 
     // probe 只要地址 ACK 就算通过，但 codec 在 I2C 上应答不代表寄存器可读写
     // （缺 MCLK、内部状态机未就绪时就会这样），所以这里做一次真实的寄存器读。
-    bool ReadCodecReg(uint8_t addr, const char* name, bool quiet = false)
+    bool ReadCodecReg(uint8_t addr, const char* name, bool quiet = false, uint32_t speed_hz = 100000)
     {
         i2c_device_config_t dev_cfg = {
             .dev_addr_length = I2C_ADDR_BIT_LEN_7,
             .device_address = addr,
-            .scl_speed_hz = 100000,
+            .scl_speed_hz = speed_hz,
         };
         i2c_master_dev_handle_t dev = nullptr;
         if (i2c_master_bus_add_device(i2c_bus_, &dev_cfg, &dev) != ESP_OK) {
@@ -164,19 +164,27 @@ public:
         }
         bool es7210_ok = ReadCodecReg(AUDIO_CODEC_ES7210_ADDR, "ES7210");
 
-        // 定量评估信号质量：连续读 30 次统计成功率。
-        // 硬件正常时应为 30/30；出现零星失败就是接线或电平转换器的问题。
-        int success = 0;
-        for (int i = 0; i < 30; i++) {
-            if (ReadCodecReg(AUDIO_CODEC_ES8311_ADDR, "ES8311", true)) {
-                success++;
+        // 多速率诊断，用于区分两类硬件问题：
+        //   - 低速(10k/50k)能通、高速失败  → 信号完整性(电容/上升沿)，短接电平转换器可解
+        //   - 所有速率成功率一样低          → 物理断线/虚焊，需补焊
+        static const uint32_t kSpeeds[] = {10000, 50000, 100000, 400000};
+        int success_100k = 0;
+        for (uint32_t spd : kSpeeds) {
+            int ok = 0;
+            for (int i = 0; i < 10; i++) {
+                if (ReadCodecReg(AUDIO_CODEC_ES8311_ADDR, "ES8311", true, spd)) {
+                    ok++;
+                }
+            }
+            ESP_LOGI(TAG, "ES8311 @%luHz: %d/10", (unsigned long)spd, ok);
+            if (spd == 100000) {
+                success_100k = ok;
             }
         }
-        ESP_LOGI(TAG, "ES8311 stability: %d/30", success);
 
-        if (!es8311_ok || !es7210_ok || success < 30) {
-            ESP_LOGE(TAG, "audio codec unreliable (es8311=%d es7210=%d stability=%d/30), fall back to dummy",
-                     es8311_ok, es7210_ok, success);
+        if (!es8311_ok || !es7210_ok || success_100k < 10) {
+            ESP_LOGE(TAG, "audio codec unreliable (es8311=%d es7210=%d 100kHz=%d/10), fall back to dummy",
+                     es8311_ok, es7210_ok, success_100k);
             static DummyAudioCodec dummy_audio(AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE);
             selected = &dummy_audio;
             return selected;
