@@ -24,20 +24,39 @@
 | TP_SDA | A4 | 11 |
 | TP_SCL | A5 | 12 |
 
-### 音频板（H1 排针 PZ254V-11-10P，原理图 `7210-SC..V1.pdf`）
+### 音频板（2.54mm 10Pin 排针，丝印 `GND VCC EN SDA SCL MCK BCK DO WS DI`）
 
-| H1 | 板侧信号 | Nano | GPIO | 说明 |
+引脚顺序以板上丝印为准，**最左侧 GND 为 1 脚**。原理图（`7210-SC..V1.pdf`）的网络名与丝印对应关系：
+`PA_EN → EN`、`ES_I2C_SDA → SDA`、`ES_I2C_SCL → SCL`、`I2S_MCK → MCK`、`I2S_BCK → BCK`、`I2S_DO → DO`、`I2S_WS → WS`、`I2S_DI → DI`。
+
+| 序号 | 板上丝印 | Nano | GPIO | 说明 |
 | :---: | :--- | :---: | :---: | :--- |
-| 1 | GND | GND | - | |
-| 2 | VCC | 5V | - | 板载 XC6206 需压差；NS4150B 直取 VCC |
-| 3 | PA_EN | A7 | 14 | 经 R10 10k 到 NS4150B CTRL |
-| 4 | ES_I2C_SDA | A4 | 11 | 与触摸共用总线 |
-| 5 | ES_I2C_SCL | A5 | 12 | 与触摸共用总线 |
-| 6 | I2S_MCK | A3 | 4 | ESP32 主出，两片 codec 共用 |
-| 7 | I2S_BCK | D5 | 8 | |
-| 8 | I2S_DO | A6 | 13 | ESP32 → ES8311 DSDIN |
-| 9 | I2S_WS | D6 | 9 | |
-| 10 | I2S_DI | D7 | 10 | ES7210 SDOUT1/TDMOUT → ESP32 |
+| 1 | GND | GND | - | 最左，1 脚标记 |
+| 2 | VCC | **5V** | - | 板载 XC6206 需压差；NS4150B 直取 VCC。**不可接 3V3** |
+| 3 | EN | A7 | 14 | 功放使能（原理图 PA_EN），经 R10 10k 到 NS4150B CTRL |
+| 4 | SDA | A4 | 11 | 与触摸 SDA **并联在同一节点** |
+| 5 | SCL | A5 | 12 | 与触摸 SCL **并联在同一节点** |
+| 6 | MCK | A3 | 4 | ESP32 主出，两片 codec 共用 |
+| 7 | BCK | D5 | 8 | |
+| 8 | DO | A6 | 13 | ESP32 → ES8311 DSDIN |
+| 9 | WS | D6 | 9 | |
+| 10 | DI | D7 | 10 | ES7210 SDOUT1/TDMOUT → ESP32 |
+
+### 喇叭与麦克风
+
+- **喇叭接口是 1.25mm 2P 座**（PH1.25 带线端子），不是 2.54mm。原理图按 4 脚画
+  （OUTP/OUTN/GND/GND），实物只装 2P 座、引出差分两线，第 3/4 脚为 GND 焊盘。
+  单声道，4Ω 3W 或 8Ω 均可；习惯上红线接 OUTP、黑线接 OUTN。
+- 麦克风为**板载** MIC1 / MIC2 小板（由 ES7210 的 MICBIAS 供电），无需外接。
+
+### 接线验证顺序
+
+1. 只接 `GND / VCC / SDA / SCL` 四根，上电后 I2C 扫描应同时出现
+   `0x15`（CST836U）、`0x18`（ES8311）、`0x41`（ES7210）。
+2. 三个地址齐全后再补 `EN / MCK / BCK / DO / WS / DI` 六根，串口日志应出现
+   `BoxAudioCodec: Duplex channels created`。
+3. 最后插喇叭。NS4150B 满功率峰值近 1A，USB 供电不足时会掉压复位，
+   此时给音频板单独供 5V 并与 Nano 共地。
 
 ## 适配要点
 
