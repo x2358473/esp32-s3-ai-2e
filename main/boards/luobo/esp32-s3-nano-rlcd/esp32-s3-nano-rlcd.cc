@@ -237,16 +237,16 @@ public:
             return selected;
         }
 
-        // 参数含义：输入增益 36dB、参考通道增益不作用（channel=-1, gain=0dB）、I2C 400kHz。
-        // 36dB 的由来：实测静默本底 -58dBFS、30cm 说话仅 -42dBFS，偏低；
-        // 而播报回声达 -32.9dBFS（比人声高 10dB），AEC 的 VERYAGGR 挡位会连带削掉近端人声。
-        // ES7210 PGA 上限约 37.5dB，故取 36dB。若仍偏弱，先降播放音量再考虑调 NLP 挡位。
+        // 参数含义：输入增益 30dB、参考通道增益不作用（channel=-1, gain=0dB）、I2C 400kHz。
+        // 曾用 36dB 补偿偏弱的人声，但底噪问题（功放常开）修复后已无必要：
+        // 播报时回采通道偏低噪，而 36dB 把回声残留一起抬高 6dB，服务端 VAD 判成用户插话，
+        // 表现为播放中被"幻听"打断。此处回到 30dB，与 esp32-es7210-es8311 参考工程一致。
         static BoxAudioCodec audio_codec(
             i2c_bus_, AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
             AUDIO_I2S_GPIO_MCLK, AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS,
             AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN,
             AUDIO_CODEC_PA_PIN, AUDIO_CODEC_ES8311_ADDR, AUDIO_CODEC_ES7210_ADDR,
-            AUDIO_INPUT_REFERENCE, 36.0f, -1, 0.0f, 400000);
+            AUDIO_INPUT_REFERENCE, 30.0f, -1, 0.0f, 400000);
         selected = &audio_codec;
 
         // 若 codec 初始化失败，此时 I2S 已在运行（MCLK/BCLK 正在翻转）。
