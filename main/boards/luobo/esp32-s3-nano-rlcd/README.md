@@ -108,3 +108,52 @@ python scripts/build.py luobo/esp32-s3-nano-rlcd --name esp32-s3-nano-rlcd
   （10k/50k/100k 实测读 0/10、写 0/5，BSS138 电平转换与低速时序冲突），ES7210 只在
   100kHz 通。故探测阶段必须各用各的速率（ES7210 失败再回退 400kHz），
   `BoxAudioCodec` 初始化时 MCLK 已运行，统一用 400kHz。
+
+## 底噪与唤醒优化记录（2026-10-31）
+
+本板自查"唤醒经常失败、唤醒后对话正常"的过程与结论，供后续换版或回退对照。
+
+### 现象与根因
+
+- 待机时 MIC1 静默电平长期在 **-41dBFS** 附近，1 秒内可波动 20dB；30cm 说话约 -42dBFS，
+  唤醒信噪比仅约 5dB，WakeNet 频繁漏检，但唤醒后走云端 ASR 仍能正常识别。
+- 根因不在麦克风：36dB PGA 下折算到 ADC 输入约 -77.5dBFS，比模拟 MIC 自噪高 15~20dB，
+  属于模拟前端被电源/地耦合污染。
+- 逐项排除后确认主因是 **NS4150B 功放常开**：`AudioService::CheckAndUpdateAudioPowerState()`
+  的关功放分支被 `duplex && input_enabled` 条件挡住（要保持 I2S TX 时钟给 RX），
+  功放静态噪声持续经电源/地耦合回 MIC。
+
+### 已落地的三项改动
+
+| 改动 | 位置 | 效果 |
+| :--- | :--- | :--- |
+| 待机 15 秒后单独拉低 PA，不触碰 I2S TX | `audio_service.cc`、`box_audio_codec.cc` | 静默底噪 **-41 → -58dBFS**，降低约 16dB |
+| WakeNet 判定模式改为 `DET_MODE_95` | `afe_audio_engine.cc` | 提高召回，实测未出现误唤醒 |
+| 待机（只剩唤醒词检测）关闭 AEC | `afe_audio_engine.cc` | 底噪再降 2~3dB 且更平稳；此时参考通道是数字静音，AEC 无实际作用 |
+
+### 实测数据（1 米，安静环境）
+
+- 待机底噪：-56 ~ -62dBFS
+- 说话时 ch0：-37 ~ -43dBFS，唤醒信噪比约 20dB
+- 唤醒成功率：约 75~80%（12~13 次尝试中成功 10 次）
+- 未触发的案例中最高电平达 **-36.4dBFS**，比多数成功案例更响，
+  说明剩余漏检与电平无关，属于 WakeNet 模型对真人发音的泛化问题。
+
+### 已知局限与后续选项（未实施）
+
+- 当前模型 `wn9_nihaoxiaozhi_tts` 由 TTS 合成语料训练，对真人口音/语速泛化有限。
+  可换 `wn9l_nihaoxiaozhi_tts3`（大模型，资源约 1.3 倍）验证；需在 `config.json` 的
+  `sdkconfig_append` 里显式把旧模型置 `n`，否则 build 脚本会把两个模型都打进
+  `srmodels.bin`，AFE 只取第一个，等于没换。
+- 硬件侧仍有优化空间（板上为 0402/0603，不便手工改）：AEC 参考取自 ES8311 输出而非
+  功放后级、参考通道无衰减网络、音频地与主控仅靠排针单点相连。
+- 待机 15 秒关功放实现在 `AudioCodec` 抽象层，所有使用 `BoxAudioCodec` 的板卡同样生效。
+
+### 临时诊断日志（定位完成后删除）
+
+- `MicLevel`：`audio_service.cc` 的 `ReadAudioData`，每秒打印 AEC 前 ch0/ch1 电平
+- `afe controls`：`afe_audio_engine.cc` 的 `ApplyAfeControls`，打印 WakeNet/AEC 开关状态
+- `Dropped N audio packets outside speaking state`（`application.cc`）与
+  `Decode queue full, dropped N`（`audio_service.cc`）：下行音频丢包统计
+- 注：`speaking -> listening` 时固定出现一次的 `Dropped 1 audio packets (state: 5)` 是
+  服务端 stop 之后的尾包，属正常现象。

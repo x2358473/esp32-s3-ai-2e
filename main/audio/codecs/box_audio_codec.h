@@ -23,6 +23,8 @@ private:
     std::mutex data_if_mutex_;
     int reference_gain_channel_ = -1;
     float reference_gain_ = 0.0f;
+    gpio_num_t pa_pin_ = GPIO_NUM_NC;
+    bool pa_enabled_ = false;
 
     void CreateDuplexChannels(gpio_num_t mclk, gpio_num_t bclk, gpio_num_t ws, gpio_num_t dout,
                               gpio_num_t din);
@@ -43,6 +45,7 @@ public:
     virtual void SetOutputVolume(int volume) override;
     virtual void EnableInput(bool enable) override;
     virtual void EnableOutput(bool enable) override;
+    virtual void SetPaEnabled(bool enabled) override;
 };
 
 #endif // _BOX_AUDIO_CODEC_H

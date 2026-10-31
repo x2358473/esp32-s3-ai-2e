@@ -386,6 +386,8 @@ void AudioService::AudioOutputTask() {
             callbacks_.on_playback_progress(task.playback_id, task.media_position_ms);
         }
 
+        // 空闲时功放被单独关闭，输出前重新使能（幂等调用）。
+        codec_->SetPaEnabled(true);
         codec_->OutputData(task.pcm);
 
         /* Update the last output time */
@@ -654,6 +656,18 @@ bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> pa
                        audio_decode_queue_.size() < MAX_DECODE_PACKETS_IN_QUEUE;
             });
         } else {
+            // 临时诊断：解码队列满导致的静默丢包（定位"丢失回答"）：问题定位后删除。
+            static uint32_t dropped = 0;
+            static int64_t last_log_us = 0;
+            ++dropped;
+            int64_t now_us = esp_timer_get_time();
+            // last_log_us 初值为 0，首包立即打印；持续丢包时按秒聚合。
+            if (now_us - last_log_us >= 1000000) {
+                ESP_LOGW(TAG, "Decode queue full, dropped %lu packets (queued: %zu)",
+                         (unsigned long)dropped, audio_decode_queue_.size());
+                dropped = 0;
+                last_log_us = now_us;
+            }
             return false;
         }
     }
@@ -883,6 +897,10 @@ void AudioService::CheckAndUpdateAudioPowerState() {
         // Keep TX clock when duplex RX is active; otherwise RX may stall on some boards.
         if (!(codec_->duplex() && codec_->input_enabled())) {
             codec_->EnableOutput(false);
+        } else {
+            // 双工且麦克风仍在采集时不能停 TX，但可以单独关功放，
+            // 避免 NS4150B 常开的静态噪声经电源/地耦合回麦克风。
+            codec_->SetPaEnabled(false);
         }
     }
     if (!codec_->input_enabled() && !codec_->output_enabled()) {

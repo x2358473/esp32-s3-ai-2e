@@ -33,6 +33,8 @@ public:
     virtual void SetInputGain(float gain);
     virtual void EnableInput(bool enable);
     virtual void EnableOutput(bool enable);
+    // 单独控制功放使能脚，不触碰 I2S 时钟。默认空实现，由需要静音降噪的板卡覆盖。
+    virtual void SetPaEnabled(bool enabled) { (void)enabled; }
 
     virtual void OutputData(std::vector<int16_t>& data);
     virtual bool InputData(std::vector<int16_t>& data);

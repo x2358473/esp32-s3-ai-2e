@@ -174,6 +174,10 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
         afe_config->vad_model_name = vad_model_name;
     }
     afe_config->wakenet_init = wake_detector_ == WakeDetector::kWakeNet;
+    // ESP-SR 只提供 DET_MODE_90（默认，低误唤醒）与 DET_MODE_95（更激进，召回更高）。
+    // 本板待机静默本底约 -41dBFS、唤醒词信噪比仅 5dB 左右，90 档经常漏检，改用 95 档。
+    const det_mode_t wakenet_det_mode = DET_MODE_95;
+    afe_config->wakenet_mode = wakenet_det_mode;
     afe_config->wakenet_model_name = nullptr;
     afe_config->wakenet_model_name_2 = nullptr;
     if (wake_detector_ == WakeDetector::kWakeNet && models_ != nullptr) {
@@ -256,9 +260,9 @@ bool AfeAudioEngine::Initialize(AudioCodec* codec, int frame_duration_ms,
     const char* detector = wake_detector_ == WakeDetector::kWakeNet
                                ? "WakeNet"
                                : (wake_detector_ == WakeDetector::kMultiNet ? "MultiNet" : "none");
-    ESP_LOGI(TAG, "Initialized FD AFE, detector: %s, NS: %s, feed: %d, fetch: %d", detector,
-             ns_enabled ? "on" : "off", afe_iface_->get_feed_chunksize(afe_data_),
-             afe_iface_->get_fetch_chunksize(afe_data_));
+    ESP_LOGI(TAG, "Initialized FD AFE, detector: %s (mode: %s), NS: %s, feed: %d, fetch: %d",
+             detector, wakenet_det_mode == DET_MODE_95 ? "95" : "90", ns_enabled ? "on" : "off",
+             afe_iface_->get_feed_chunksize(afe_data_), afe_iface_->get_fetch_chunksize(afe_data_));
     ESP_LOGI(TAG, "After AFE create: free=%u min=%u largest=%u",
              heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
@@ -402,8 +406,9 @@ void AfeAudioEngine::ApplyAfeControls() {
         }
     }
     if (codec_->input_reference()) {
-        const bool enable_aec = (bits & kWakeWordEnabled) ||
-                                (device_aec_enabled_.load() && (bits & kVoiceProcessingEnabled));
+        // 只在真正做上行语音处理时才开 AEC：待机仅剩唤醒词检测时参考通道是数字静音，
+        // AEC 消不掉任何东西，却会经 NLP 削弱近端人声，反而不利于唤醒。
+        const bool enable_aec = device_aec_enabled_.load() && (bits & kVoiceProcessingEnabled);
         if (enable_aec) {
             afe_iface_->enable_aec(afe_data_);
             aec_on = true;

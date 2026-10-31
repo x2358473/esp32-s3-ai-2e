@@ -1,6 +1,7 @@
 #include "box_audio_codec.h"
 
 #include <esp_log.h>
+#include <driver/gpio.h>
 #include <driver/i2c_master.h>
 #include <driver/i2s_tdm.h>
 #include <type_traits>
@@ -49,6 +50,7 @@ BoxAudioCodec::BoxAudioCodec(void* i2c_master_handle, int input_sample_rate, int
                              uint32_t i2c_clock_speed) {
     duplex_ = true;                              // 是否双工
     input_reference_ = input_reference;          // 是否使用参考输入，实现回声消除
+    pa_pin_ = pa_pin;                            // 单独控制功放使能，用于空闲时关闭
     input_channels_ = input_reference_ ? 2 : 1;  // 输入通道数
     input_sample_rate_ = input_sample_rate;
     output_sample_rate_ = output_sample_rate;
@@ -322,10 +324,24 @@ void BoxAudioCodec::EnableOutput(bool enable) {
         };
         ESP_ERROR_CHECK(esp_codec_dev_open(output_dev_, &fs));
         ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(output_dev_, output_volume_));
+        pa_enabled_ = pa_pin_ != GPIO_NUM_NC;
     } else {
         ESP_ERROR_CHECK(esp_codec_dev_close(output_dev_));
+        // 不依赖驱动内部是否拉低 PA，这里确保功放关闭。
+        pa_enabled_ = false;
+        if (pa_pin_ != GPIO_NUM_NC) {
+            gpio_set_level(pa_pin_, 0);
+        }
     }
     AudioCodec::EnableOutput(enable);
+}
+
+void BoxAudioCodec::SetPaEnabled(bool enabled) {
+    if (pa_pin_ == GPIO_NUM_NC || pa_enabled_ == enabled) {
+        return;
+    }
+    pa_enabled_ = enabled;
+    gpio_set_level(pa_pin_, enabled ? 1 : 0);
 }
 
 int BoxAudioCodec::Read(int16_t* dest, int samples) {

@@ -554,6 +554,19 @@ void Application::InitializeProtocol() {
     protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
         if (GetDeviceState() == kDeviceStateSpeaking) {
             audio_service_.PushPacketToDecodeQueue(std::move(packet));
+        } else {
+            // 临时诊断：统计非 speaking 状态被丢弃的音频包（定位"丢失回答"）：问题定位后删除。
+            static uint32_t dropped = 0;
+            static int64_t last_log_us = 0;
+            ++dropped;
+            int64_t now_us = esp_timer_get_time();
+            // last_log_us 初值为 0，首包立即打印；持续丢包时按秒聚合。
+            if (now_us - last_log_us >= 1000000) {
+                ESP_LOGW(TAG, "Dropped %lu audio packets outside speaking state (state: %d)",
+                         (unsigned long)dropped, (int)GetDeviceState());
+                dropped = 0;
+                last_log_us = now_us;
+            }
         }
     });
 
