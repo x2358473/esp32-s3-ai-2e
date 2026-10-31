@@ -157,3 +157,131 @@ python scripts/build.py luobo/esp32-s3-nano-rlcd --name esp32-s3-nano-rlcd
   `Decode queue full, dropped N`（`audio_service.cc`）：下行音频丢包统计
 - 注：`speaking -> listening` 时固定出现一次的 `Dropped 1 audio packets (state: 5)` 是
   服务端 stop 之后的尾包，属正常现象。
+
+## 幻听（误触发）问题排查记录（2026-10-31，进行中）
+
+底噪问题解决后暴露出的第二个问题：**用户没有说话，服务端却收到语音并回答**，日志表现为
+`>> 好。` `>> 一。` `>> 你怀疑。` `>> 需。` 之类的单字/残词，随后连续触发工具调用
+（`<< % get_random_jokes...`）。当前仍在处理中，以下是全部已知信息，换机器接手时按此继续。
+
+### 触发条件（实测归纳）
+
+| 触发场景 | 说明 |
+| :--- | :--- |
+| TTS 播放中 | 服务端先判定"用户插话"，发 `tts stop` 打断，随后返回 ASR 结果；听感是故事被从中间截断 |
+| `speaking -> listening` 后 1~2 秒 | 扬声器与房间混响尾音仍在麦克风里，被上行送出 |
+| 机械振动 | 敲机械键盘、**挪动/晃动设备**最容易触发；32AWG 长线在晃动时还会引入接触扰动 |
+| 播放音量偏大 | 音量越大越容易触发（回采通道无衰减，功放接近饱和后 AEC 参考失真） |
+
+### 已排除的方向
+
+- **不是内存**：`free sram` 常驻 127KB 以上，无分配失败日志。
+- **不是 `DET_MODE_95`**：该参数只影响本地 WakeNet 判定，与云端 ASR 无关。
+- **不是待机 AEC 关闭**：`listening` 期间日志一直是 `aec=on (bits=0x6)`。
+- **不是单纯音量**：把音量降到 60% 仍会触发。
+- **不是 `AEC_MODE_FD_LOW_COST` 一项**：升到 `FD_HIGH_PERF` 后仍会触发。
+
+### 当前判定
+
+三条因素叠加：
+
+1. **设备端 AEC 消不干净**。参考通道取自 ES8311 输出（喇叭前级）+ R5/R7 为 0Ω 无衰减，
+   功放接近饱和时实际回声与参考失配，残留在上行里。
+2. **服务端 VAD 是绝对阈值判定**，残留一旦越阈就判成"用户插话"，ASR 再从残音里拼出词。
+3. **机械振动耦合**：设备为 0402/0603 板 + 8~9cm 32AWG 排线，晃动时结构传导与接触扰动
+   直接进麦克风，这类低频冲击被 ASR 误识别。
+
+### 已做但尚未提交的改动（4 项，均在 `board/nano-rlcd` 分支工作区）
+
+| # | 改动 | 文件 | 取值/说明 | 回退方式 |
+| :--- | :--- | :--- | :--- | :--- |
+| 1 | 输入增益 36 → **30dB** | `esp32-s3-nano-rlcd.cc:249` | 与参考工程一致，减少回声残留 6dB | 改回 `36.0f` |
+| 2 | AEC `FD_LOW_COST` → **`FD_HIGH_PERF`** | `afe_audio_engine.cc` `aec_mode` | 提升消除深度 | 改回 `AEC_MODE_FD_LOW_COST` |
+| 3 | **上行抑制窗口 300ms** | `audio_service.cc` `SuppressUplinkForMs()` + `application.cc` tts stop | 播放结束后丢弃上行帧，避免尾音被识别 | 删掉 `SuppressUplinkForMs(300)` 调用 |
+| 4 | **输入二阶高通 150Hz** | `audio_service.cc` `ReadAudioData()` | 抑制机械振动造成的低频冲击，双通道同系数不影响 AEC | 删除该代码块 |
+
+第 3 项的验证日志：`Suppress uplink for 300 ms after playback stop` 与
+`Uplink suppress window ended, dropped N frames`（N 通常 4~6 帧）。
+
+### 下一步候选（按优先级，均未实施）
+
+1. **I2C 拆成独立总线**：当前触摸（CST836U）与 codec 共用 `i2c_bus_`（SDA=11/SCL=12），
+   触摸持续轮询的流量顺着 8~9cm 线材进入音频板。方案：新建第二条 `i2c_master_bus`
+   （**SDA=15 / SCL=16**，实测这两脚空闲、非 strapping），仅传给 `BoxAudioCodec`，
+   触摸保持 11/12 不动。配合 **≤5cm、26AWG** 的短线，收益明确。
+   - 实现位置：`esp32-s3-nano-rlcd.cc` 的 `InitI2c()` 之后新增 bus，`BoxAudioCodec` 构造改传新 bus。
+   - 注意：19/20、43/44、33~37 不可用（USB / USB-CDC / Octal PSRAM）。
+2. **线材与接地**：GND、5V 由 32AWG 单根改为 **26AWG 或 32AWG 双股并联**；
+   多根地线必须**回到同一个接地点并联**，不能分散接不同位置（否则形成地环路）。
+   功放回流地优先加粗。
+3. **上行 VAD 门控**：把参考工程 `esp32-es7210-es8311/main/example_es7210_es8311.c`
+   的三段式打断逻辑搬到上行：播放开始 1s 内不判定 → 需 300ms 静音才"武装" →
+   武装后连续 500ms 语音才放行。这样回声残留永远到不了服务端。
+   参考常量：`kLocalBargeInStartupGuardUs=1000ms`、`kLocalBargeInArmSilenceUs=300ms`、
+   `kLocalBargeInVadThresholdUs=500ms`。
+4. **服务端侧**：调高 xiaozhi-server 的 VAD 阈值 / 最短语音时长（设备端管不到）。
+5. **麦克风机械减震**：麦克风孔加防尘网/泡棉，或在麦克风与外壳间垫硅胶，切断结构传导。
+6. **换唤醒词模型** `wn9l_nihaoxiaozhi_tts3`（与幻听无关，用于提升唤醒召回，见上一节）。
+
+### 与参考工程 `esp32-es7210-es8311` 的配置差异
+
+| 项 | 参考工程 | 本固件 |
+| :--- | :--- | :--- |
+| AFE 类型 | `AFE_TYPE_VC` + `AFE_MODE_HIGH_PERF` | `AFE_TYPE_FD` + `AFE_MODE_LOW_COST` |
+| AEC 模式 | `AEC_MODE_VOIP_HIGH_PERF` | `AEC_MODE_FD_HIGH_PERF`（原 LOW_COST） |
+| NLP | 默认 `AGGR` | `VERY_AGGR` |
+| 输入增益 | 30dB | 30dB（原 36dB） |
+| 打断判定 | 设备本地三段式保护 | 无，完全依赖服务端 VAD |
+
+### 关键日志速查
+
+| 日志 | 含义 |
+| :--- | :--- |
+| `AFE Pipeline: ... |AEC(FD_HIGH_PERF, NLP_VERY_AGGRESSIVE)|` | 确认 AEC 档位是否生效 |
+| `afe controls: wakenet=on aec=off (bits=0x5)` | 待机态（只有唤醒词） |
+| `afe controls: wakenet=off aec=on (bits=0x6)` | 对话态（AEC 打开） |
+| `MicLevel: ch0=.. ch1=..` | AEC 前电平；ch1 是回采参考，静默时应为 -90dBFS |
+| `>> 单字` | 服务端 ASR 结果，若用户未说话即为幻听 |
+| `Wrong sequence` | UDP 丢包，单次约 60ms，与幻听无关 |
+
+## 开发环境搭建（换机器照此执行）
+
+以下流程在 macOS（Apple Silicon）实测通过，工具链版本 ESP-IDF **v6.1**。
+
+```sh
+# 1. 依赖（macOS 下 install.sh 不装 cmake/ninja，必须单独装）
+brew install cmake ninja
+
+# 2. 取 ESP-IDF（浅克隆 + 子模块，约 750MB）
+mkdir -p ~/esp && cd ~/esp
+git clone -b v6.1 --recursive --depth 1 --shallow-submodules https://github.com/espressif/esp-idf.git
+
+# 3. 安装 esp32s3 工具链（约 4.8GB，装到 ~/.espressif）
+cd ~/esp/esp-idf && ./install.sh esp32s3
+
+# 4. 每次开新终端都要 source
+. ~/esp/esp-idf/export.sh
+```
+
+构建与烧录（工程根目录）：
+
+```sh
+cd /path/to/esp32-s3-ai-2e
+python3 scripts/build.py luobo/esp32-s3-nano-rlcd --name esp32-s3-nano-rlcd
+idf.py -p /dev/cu.usbmodem* flash monitor
+```
+
+产物：`build/xiaozhi.bin`（app）、`build/generated_assets.bin`（assets，含唤醒词模型）、
+`build/merged-binary.bin`（整包）。`python3 scripts/build.py --list-boards` 可列出全部板卡。
+
+首次构建会下载约 74 个 managed components，之后增量编译约 2 分钟。
+`build/`、`sdkconfig`、`managed_components/` 均在 gitignore 内，不纳入版本管理。
+
+## 当前 Git 状态（2026-10-31 收尾时）
+
+- 分支：`board/nano-rlcd`，已 push 到 `origin/board/nano-rlcd`
+- 已提交：`e88f594 修复待机底噪过高导致的唤醒失败`（PA 空闲关闭、DET_MODE_95、待机关 AEC、丢包诊断、本文档上一节）
+- 未提交：上面「已做但尚未提交的改动」中的 4 项
+
+建议后续按逻辑拆成独立提交：增益/AEC 档位、上行抑制窗口、输入高通、I2C 拆分，
+方便单项回退与 A/B 对比。
